@@ -6,6 +6,7 @@ import (
 	"os"
 	"sync/atomic"
 
+	"github.com/ecopelan/wcc/internal/logging"
 	"github.com/ollama/ollama/api"
 )
 
@@ -17,7 +18,7 @@ type OllamaClient struct {
 	toolIDSeq atomic.Int64
 }
 
-// NewOllamaClient creates a new Ollama client
+// NewOllamaClient creates a new Ollama client and ensures the model is available locally.
 func NewOllamaClient(model string, temperature float64, ollamaHost string) (*OllamaClient, error) {
 	if ollamaHost != "" {
 		if err := os.Setenv("OLLAMA_HOST", ollamaHost); err != nil {
@@ -30,11 +31,44 @@ func NewOllamaClient(model string, temperature float64, ollamaHost string) (*Oll
 		return nil, fmt.Errorf("failed to create ollama client: %w", err)
 	}
 
-	return &OllamaClient{
+	oc := &OllamaClient{
 		client: client,
 		model:  model,
 		temp:   temperature,
-	}, nil
+	}
+
+	if err := oc.ensureModel(context.Background()); err != nil {
+		return nil, err
+	}
+
+	return oc, nil
+}
+
+// ensureModel checks if the model is available locally and pulls it if not.
+func (oc *OllamaClient) ensureModel(ctx context.Context) error {
+	logger := logging.Get()
+
+	// Check if model already exists
+	_, err := oc.client.Show(ctx, &api.ShowRequest{Model: oc.model})
+	if err == nil {
+		logger.Debug().Str("model", oc.model).Msg("Ollama model already available")
+		return nil
+	}
+
+	// Model not found — pull it
+	logger.Info().Str("model", oc.model).Msg("Model not found locally, pulling...")
+	if err := oc.client.Pull(ctx, &api.PullRequest{Model: oc.model}, func(resp api.ProgressResponse) error {
+		if resp.Total > 0 {
+			pct := float64(resp.Completed) / float64(resp.Total) * 100
+			logger.Info().Str("status", resp.Status).Float64("percent", pct).Msg("Pulling model")
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("failed to pull model %q: %w", oc.model, err)
+	}
+
+	logger.Info().Str("model", oc.model).Msg("Model pull complete")
+	return nil
 }
 
 // Converse calls the Ollama Chat API
