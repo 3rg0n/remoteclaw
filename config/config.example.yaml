@@ -1,0 +1,45 @@
+# WCC Configuration
+# Copy to config.yaml and fill in your values.
+
+# Connection mode: "native" or "wmcp"
+mode: native
+
+# Native Webex mode settings
+webex:
+  bot_token: "${WEBEX_BOT_TOKEN}"
+  allowed_emails:
+    - "admin@company.com"
+    - "ops-team@company.com"
+
+# WMCP mode settings (when mode: wmcp)
+wmcp:
+  endpoint: "https://wmcp.example.com"
+  token: "${WMCP_TOKEN}"
+
+# AWS Bedrock
+aws:
+  region: "us-west-2"
+  # credentials via default provider chain (env, IAM role, ~/.aws/credentials)
+
+# AI
+ai:
+  model: "us.anthropic.claude-sonnet-4-20250514-v1:0"
+  max_tokens: 4096
+  max_iterations: 10
+
+# Execution
+execution:
+  default_timeout: "30s"
+  max_timeout: "5m"
+  shell: ""  # auto-detect: sh on Linux/macOS, powershell on Windows
+
+# Logging
+logging:
+  level: "info"
+  format: "json"
+  file: ""  # empty = stdout only
+
+# Health check
+health:
+  enabled: true
+  addr: "127.0.0.1:9090"
