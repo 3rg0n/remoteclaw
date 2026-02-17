@@ -46,9 +46,12 @@ type AWSConfig struct {
 
 // AIConfig holds AI model settings
 type AIConfig struct {
-	Model        string `mapstructure:"model"`
-	MaxTokens    int    `mapstructure:"max_tokens"`
-	MaxIterations int   `mapstructure:"max_iterations"`
+	Provider      string  `mapstructure:"provider"`     // "auto", "local", "bedrock"
+	Model         string  `mapstructure:"model"`
+	MaxTokens     int     `mapstructure:"max_tokens"`
+	MaxIterations int     `mapstructure:"max_iterations"`
+	Temperature   float64 `mapstructure:"temperature"`   // 0.0-1.0
+	OllamaHost    string  `mapstructure:"ollama_host"`   // e.g. "http://localhost:11434"
 }
 
 // ExecutionConfig holds command execution settings
@@ -108,9 +111,11 @@ func Load(path string) (*Config, error) {
 func applyDefaults(v *viper.Viper) {
 	v.SetDefault("mode", "native")
 	v.SetDefault("aws.region", "us-west-2")
-	v.SetDefault("ai.model", "us.anthropic.claude-sonnet-4-20250514-v1:0")
+	v.SetDefault("ai.provider", "auto")
+	v.SetDefault("ai.model", "phi4-mini")
 	v.SetDefault("ai.max_tokens", 4096)
 	v.SetDefault("ai.max_iterations", 10)
+	v.SetDefault("ai.temperature", 0.2)
 	v.SetDefault("execution.default_timeout", "30s")
 	v.SetDefault("execution.max_timeout", "5m")
 	v.SetDefault("logging.level", "info")
@@ -124,8 +129,22 @@ func (c *Config) expandEnvVars() {
 	c.Webex.BotToken = os.ExpandEnv(c.Webex.BotToken)
 	c.WMCP.Endpoint = os.ExpandEnv(c.WMCP.Endpoint)
 	c.WMCP.Token = os.ExpandEnv(c.WMCP.Token)
+	c.AI.OllamaHost = os.ExpandEnv(c.AI.OllamaHost)
 	c.Execution.Shell = os.ExpandEnv(c.Execution.Shell)
 	c.Logging.File = os.ExpandEnv(c.Logging.File)
+}
+
+// ResolveAIProvider determines the AI provider based on config and environment
+func (c *Config) ResolveAIProvider() string {
+	switch c.AI.Provider {
+	case "local", "bedrock":
+		return c.AI.Provider
+	default: // "auto" or empty
+		if os.Getenv("AWS_ACCESS_KEY_ID") != "" && os.Getenv("AWS_SECRET_ACCESS_KEY") != "" {
+			return "bedrock"
+		}
+		return "local"
+	}
 }
 
 // Validate checks that required fields are populated based on the configured mode
@@ -151,9 +170,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate AWS region
-	if c.AWS.Region == "" {
-		return fmt.Errorf("aws.region is required")
+	// AWS region is only required when using Bedrock
+	if c.ResolveAIProvider() == "bedrock" {
+		if c.AWS.Region == "" {
+			return fmt.Errorf("aws.region is required when using bedrock provider")
+		}
+		// If model is still the local default, override to Bedrock default
+		if c.AI.Model == "phi4-mini" || c.AI.Model == "phi4" {
+			c.AI.Model = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+		}
 	}
 
 	return nil

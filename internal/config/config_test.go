@@ -102,6 +102,10 @@ aws:
 }
 
 func TestLoadConfigWithDefaults(t *testing.T) {
+	// Clear AWS creds so auto-detection resolves to "local"
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -121,9 +125,11 @@ aws:
 	require.NoError(t, err)
 
 	// Check defaults are applied
-	assert.Equal(t, "us.anthropic.claude-sonnet-4-20250514-v1:0", cfg.AI.Model)
+	assert.Equal(t, "auto", cfg.AI.Provider)
+	assert.Equal(t, "phi4-mini", cfg.AI.Model)
 	assert.Equal(t, 4096, cfg.AI.MaxTokens)
 	assert.Equal(t, 10, cfg.AI.MaxIterations)
+	assert.InDelta(t, 0.2, cfg.AI.Temperature, 0.001)
 
 	assert.Equal(t, 30*time.Second, cfg.Execution.DefaultTimeout)
 	assert.Equal(t, 5*time.Minute, cfg.Execution.MaxTimeout)
@@ -224,7 +230,7 @@ aws:
 	assert.Contains(t, err.Error(), "invalid mode")
 }
 
-func TestValidateRequiresAWSRegion(t *testing.T) {
+func TestValidateRequiresAWSRegionForBedrock(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -232,6 +238,8 @@ func TestValidateRequiresAWSRegion(t *testing.T) {
 mode: native
 webex:
   bot_token: "test-token"
+ai:
+  provider: "bedrock"
 aws:
   region: ""
 `
@@ -242,7 +250,29 @@ aws:
 	cfg, err := Load(configPath)
 	assert.Error(t, err)
 	assert.Nil(t, cfg)
-	assert.Contains(t, err.Error(), "aws.region is required")
+	assert.Contains(t, err.Error(), "aws.region is required when using bedrock provider")
+}
+
+func TestValidateAWSRegionNotRequiredForLocal(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+mode: native
+webex:
+  bot_token: "test-token"
+ai:
+  provider: "local"
+aws:
+  region: ""
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	cfg, err := Load(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, "local", cfg.ResolveAIProvider())
 }
 
 func TestLoadNonExistentFile(t *testing.T) {
@@ -277,6 +307,10 @@ aws:
 }
 
 func TestLoadConfigWMCPMode(t *testing.T) {
+	// Clear AWS creds so auto-detection resolves to "local"
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -304,7 +338,7 @@ logging:
 	assert.Equal(t, "warn", cfg.Logging.Level)
 
 	// Verify other defaults still apply
-	assert.Equal(t, "us.anthropic.claude-sonnet-4-20250514-v1:0", cfg.AI.Model)
+	assert.Equal(t, "phi4-mini", cfg.AI.Model)
 	assert.True(t, cfg.Health.Enabled)
 }
 
@@ -450,18 +484,37 @@ func TestValidateStructMethod(t *testing.T) {
 			errMsg:  "wmcp.token is required in wmcp mode",
 		},
 		{
-			name: "missing aws region",
+			name: "missing aws region with bedrock provider",
 			cfg: &Config{
 				Mode: "native",
 				Webex: WebexConfig{
 					BotToken: "token",
+				},
+				AI: AIConfig{
+					Provider: "bedrock",
 				},
 				AWS: AWSConfig{
 					Region: "",
 				},
 			},
 			wantErr: true,
-			errMsg:  "aws.region is required",
+			errMsg:  "aws.region is required when using bedrock provider",
+		},
+		{
+			name: "missing aws region with local provider is ok",
+			cfg: &Config{
+				Mode: "native",
+				Webex: WebexConfig{
+					BotToken: "token",
+				},
+				AI: AIConfig{
+					Provider: "local",
+				},
+				AWS: AWSConfig{
+					Region: "",
+				},
+			},
+			wantErr: false,
 		},
 	}
 
@@ -476,4 +529,96 @@ func TestValidateStructMethod(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveAIProvider_ExplicitLocal(t *testing.T) {
+	cfg := &Config{AI: AIConfig{Provider: "local"}}
+	assert.Equal(t, "local", cfg.ResolveAIProvider())
+}
+
+func TestResolveAIProvider_ExplicitBedrock(t *testing.T) {
+	cfg := &Config{AI: AIConfig{Provider: "bedrock"}}
+	assert.Equal(t, "bedrock", cfg.ResolveAIProvider())
+}
+
+func TestResolveAIProvider_AutoWithAWSCreds(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "secretkey")
+
+	cfg := &Config{AI: AIConfig{Provider: "auto"}}
+	assert.Equal(t, "bedrock", cfg.ResolveAIProvider())
+}
+
+func TestResolveAIProvider_AutoWithoutAWSCreds(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+
+	cfg := &Config{AI: AIConfig{Provider: "auto"}}
+	assert.Equal(t, "local", cfg.ResolveAIProvider())
+}
+
+func TestResolveAIProvider_AutoWithPartialAWSCreds(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+
+	cfg := &Config{AI: AIConfig{Provider: "auto"}}
+	assert.Equal(t, "local", cfg.ResolveAIProvider())
+}
+
+func TestResolveAIProvider_EmptyDefaultsToLocal(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
+
+	cfg := &Config{AI: AIConfig{Provider: ""}}
+	assert.Equal(t, "local", cfg.ResolveAIProvider())
+}
+
+func TestValidateBedrockOverridesLocalModel(t *testing.T) {
+	cfg := &Config{
+		Mode: "native",
+		Webex: WebexConfig{
+			BotToken: "token",
+		},
+		AI: AIConfig{
+			Provider: "bedrock",
+			Model:    "phi4-mini",
+		},
+		AWS: AWSConfig{
+			Region: "us-west-2",
+		},
+	}
+
+	err := cfg.Validate()
+	require.NoError(t, err)
+	assert.Equal(t, "us.anthropic.claude-sonnet-4-20250514-v1:0", cfg.AI.Model)
+}
+
+func TestValidateBedrockKeepsExplicitModel(t *testing.T) {
+	cfg := &Config{
+		Mode: "native",
+		Webex: WebexConfig{
+			BotToken: "token",
+		},
+		AI: AIConfig{
+			Provider: "bedrock",
+			Model:    "us.anthropic.claude-haiku-3-20240307-v1:0",
+		},
+		AWS: AWSConfig{
+			Region: "us-west-2",
+		},
+	}
+
+	err := cfg.Validate()
+	require.NoError(t, err)
+	assert.Equal(t, "us.anthropic.claude-haiku-3-20240307-v1:0", cfg.AI.Model)
+}
+
+func TestExpandEnvVarsOllamaHost(t *testing.T) {
+	cfg := &Config{}
+	cfg.AI.OllamaHost = "${OLLAMA_HOST_VAR}"
+
+	t.Setenv("OLLAMA_HOST_VAR", "http://myhost:11434")
+	cfg.expandEnvVars()
+
+	assert.Equal(t, "http://myhost:11434", cfg.AI.OllamaHost)
 }

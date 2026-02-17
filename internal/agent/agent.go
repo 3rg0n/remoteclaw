@@ -40,14 +40,31 @@ func New(cfg *config.Config) (*Agent, error) {
 	// Create executor with config timeouts
 	exec := executor.New(cfg.Execution.DefaultTimeout, cfg.Execution.MaxTimeout, cfg.Execution.Shell)
 
-	// Create Bedrock client
+	// Create AI client based on resolved provider
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	bedrockClient, err := ai.NewBedrockClient(ctx, cfg.AWS.Region, cfg.AI.Model)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create bedrock client: %w", err)
+	provider := cfg.ResolveAIProvider()
+	var converser ai.Converser
+	var err error
+
+	switch provider {
+	case "bedrock":
+		model := cfg.AI.Model
+		if model == "phi4-mini" || model == "phi4" {
+			model = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+		}
+		converser, err = ai.NewBedrockClient(ctx, cfg.AWS.Region, model, cfg.AI.Temperature)
+	case "local":
+		converser, err = ai.NewOllamaClient(cfg.AI.Model, cfg.AI.Temperature, cfg.AI.OllamaHost)
+	default:
+		err = fmt.Errorf("unknown AI provider: %s", provider)
 	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to create %s AI client: %w", provider, err)
+	}
+
+	logger.Info().Str("provider", provider).Str("model", cfg.AI.Model).Msg("AI provider initialized")
 
 	// Build system prompt
 	hostname, err := os.Hostname()
@@ -77,7 +94,7 @@ func New(cfg *config.Config) (*Agent, error) {
 
 	// Create AI processor
 	processor := ai.NewProcessor(ai.ProcessorConfig{
-		Converser:     bedrockClient,
+		Converser:     converser,
 		SystemPrompt:  systemPrompt,
 		Tools:         ai.AllTools(),
 		MaxTokens:     cfg.AI.MaxTokens,

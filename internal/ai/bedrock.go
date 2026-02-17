@@ -12,29 +12,13 @@ import (
 
 // BedrockClient wraps the AWS Bedrock runtime client
 type BedrockClient struct {
-	client *bedrockruntime.Client
-	model  string
-}
-
-// Message represents a conversation message
-type Message struct {
-	Role    string         // "user" or "assistant"
-	Content []ContentBlock // Message content blocks
-}
-
-// ContentBlock represents a piece of content in a message
-type ContentBlock struct {
-	Type      string         // "text", "tool_use", "tool_result"
-	Text      string         // For text blocks
-	ToolUseID string         // For tool_use and tool_result blocks
-	ToolName  string         // For tool_use blocks
-	Input     map[string]any // For tool_use blocks
-	Content   string         // For tool_result blocks (result content)
-	IsError   bool           // For tool_result blocks
+	client      *bedrockruntime.Client
+	model       string
+	temperature float64
 }
 
 // NewBedrockClient creates a new Bedrock client
-func NewBedrockClient(ctx context.Context, region, model string) (*BedrockClient, error) {
+func NewBedrockClient(ctx context.Context, region, model string, temperature float64) (*BedrockClient, error) {
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, awsconfig.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -42,8 +26,9 @@ func NewBedrockClient(ctx context.Context, region, model string) (*BedrockClient
 
 	client := bedrockruntime.NewFromConfig(cfg)
 	return &BedrockClient{
-		client: client,
-		model:  model,
+		client:      client,
+		model:       model,
+		temperature: temperature,
 	}, nil
 }
 
@@ -68,8 +53,10 @@ func (bc *BedrockClient) Converse(
 	}
 	// Safe cast since we've validated maxTokens is positive and reasonable
 	//nolint:gosec // G115: maxTokens is validated above
+	temp := float32(bc.temperature)
 	inferenceConfig := &types.InferenceConfiguration{
-		MaxTokens: int32Ptr(int32(maxTokens)),
+		MaxTokens:   int32Ptr(int32(maxTokens)),
+		Temperature: &temp,
 	}
 
 	// Build tool configuration if tools are provided
