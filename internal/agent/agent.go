@@ -41,22 +41,24 @@ func New(cfg *config.Config) (*Agent, error) {
 	exec := executor.New(cfg.Execution.DefaultTimeout, cfg.Execution.MaxTimeout, cfg.Execution.Shell)
 
 	// Create AI client based on resolved provider
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
 	provider := cfg.ResolveAIProvider()
 	var converser ai.Converser
 	var err error
 
 	switch provider {
 	case "bedrock":
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		model := cfg.AI.Model
 		if model == "phi4-mini" || model == "phi4" {
 			model = "us.anthropic.claude-sonnet-4-20250514-v1:0"
 		}
 		converser, err = ai.NewBedrockClient(ctx, cfg.AWS.Region, model, cfg.AI.Temperature)
 	case "local":
-		converser, err = ai.NewOllamaClient(cfg.AI.Model, cfg.AI.Temperature, cfg.AI.OllamaHost)
+		// Longer timeout: first run may need to pull the model
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		converser, err = ai.NewOllamaClient(ctx, cfg.AI.Model, cfg.AI.Temperature, cfg.AI.OllamaHost)
 	default:
 		err = fmt.Errorf("unknown AI provider: %s", provider)
 	}

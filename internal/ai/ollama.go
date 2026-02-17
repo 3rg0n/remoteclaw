@@ -18,8 +18,9 @@ type OllamaClient struct {
 	toolIDSeq atomic.Int64
 }
 
-// NewOllamaClient creates a new Ollama client and ensures the model is available locally.
-func NewOllamaClient(model string, temperature float64, ollamaHost string) (*OllamaClient, error) {
+// NewOllamaClient creates a new Ollama client, verifies the server is
+// reachable, and ensures the model is available locally (pulling if needed).
+func NewOllamaClient(ctx context.Context, model string, temperature float64, ollamaHost string) (*OllamaClient, error) {
 	if ollamaHost != "" {
 		if err := os.Setenv("OLLAMA_HOST", ollamaHost); err != nil {
 			return nil, fmt.Errorf("failed to set OLLAMA_HOST: %w", err)
@@ -37,16 +38,23 @@ func NewOllamaClient(model string, temperature float64, ollamaHost string) (*Oll
 		temp:   temperature,
 	}
 
-	if err := oc.ensureModel(context.Background()); err != nil {
+	if err := oc.ensureModel(ctx); err != nil {
 		return nil, err
 	}
 
 	return oc, nil
 }
 
-// ensureModel checks if the model is available locally and pulls it if not.
+// ensureModel verifies the Ollama server is reachable and the model is
+// available locally, pulling it automatically if needed.
 func (oc *OllamaClient) ensureModel(ctx context.Context) error {
 	logger := logging.Get()
+
+	// Verify Ollama server is reachable
+	if err := oc.client.Heartbeat(ctx); err != nil {
+		return fmt.Errorf("ollama server not reachable (is it running?): %w", err)
+	}
+	logger.Debug().Msg("Ollama server is reachable")
 
 	// Check if model already exists
 	_, err := oc.client.Show(ctx, &api.ShowRequest{Model: oc.model})
