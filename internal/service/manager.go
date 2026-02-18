@@ -42,7 +42,7 @@ func (p *program) Stop(s service.Service) error {
 func New(cfg Config) (*Manager, error) {
 	// Set defaults
 	if cfg.Name == "" {
-		cfg.Name = "wcc"
+		cfg.Name = "wcca"
 	}
 	if cfg.DisplayName == "" {
 		cfg.DisplayName = "WCC Agent"

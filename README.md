@@ -1,13 +1,13 @@
-# WCC — Webex Command and Control
+# WCCA — Webex Command and Control Agent
 
-WCC is a local agent that lets you remotely control a system via a Webex bot, powered by AI. Send natural language commands through Webex (e.g., "restart the nginx service", "check disk usage") and the AI interprets them, executes them on the local machine, and reports back the results.
+WCCA is a local agent that lets you remotely control a system via a Webex bot, powered by AI. Send natural language commands through Webex (e.g., "restart the nginx service", "check disk usage") and the AI interprets them, executes them on the local machine, and reports back the results.
 
 ## How It Works
 
 ```
  Webex User                    Webex Cloud                   Local Machine
 ┌──────────┐   message    ┌─────────────────┐  Mercury WS  ┌──────────────┐
-│  Webex    │─────────────►│  Webex Messaging │─────────────►│   WCC Agent  │
+│  Webex    │─────────────►│  Webex Messaging │─────────────►│   WCCA Agent  │
 │  Client   │◄─────────────│  Platform        │◄─────────────│              │
 └──────────┘   response   └─────────────────┘   REST API   │  ┌────────┐  │
                                                             │  │ AI     │  │
@@ -22,7 +22,7 @@ WCC is a local agent that lets you remotely control a system via a Webex bot, po
 ```
 
 1. You message the Webex bot (e.g., "check disk space")
-2. WCC receives the message via Mercury WebSocket
+2. WCCA receives the message via Mercury WebSocket
 3. The AI engine interprets the request and decides which commands to run
 4. Commands execute locally with safety checks
 5. Results are sent back through Webex
@@ -37,11 +37,11 @@ WCC is a local agent that lets you remotely control a system via a Webex bot, po
 
 ## Creating a Webex Bot Token
 
-WCC uses a **Webex Bot**, not an Integration. Bots use a simple access token — no OAuth redirect URIs or scopes required.
+WCCA uses a **Webex Bot**, not an Integration. Bots use a simple access token — no OAuth redirect URIs or scopes required.
 
 When you go to [developer.webex.com](https://developer.webex.com) → **Create a New App**, you'll see several options:
 
-| App Type | What it's for | WCC? |
+| App Type | What it's for | WCCA? |
 |----------|--------------|------|
 | **Bot** | Chatbots that post content and respond to commands | **Yes — use this** |
 | Integration | OAuth apps that act on behalf of a user (requires scopes, redirect URIs) | No |
@@ -55,7 +55,7 @@ When you go to [developer.webex.com](https://developer.webex.com) → **Create a
 2. Click **Create a New App**
 3. Select **Create a Bot**
 4. Fill in the form:
-   - **Bot Name** — Display name shown in Webex (e.g., "WCC Remote Hands")
+   - **Bot Name** — Display name shown in Webex (e.g., "WCCA Remote Hands")
    - **Bot Username** — Unique identifier, becomes `username@webex.bot` (e.g., `wcc-prod`). Cannot be changed later.
    - **Icon** — Upload a 512x512 PNG/JPEG or pick a default
    - **App Hub Description** — e.g., "AI-powered remote system administration"
@@ -97,7 +97,7 @@ Webex bots are globally addressable — any Webex user can direct-message any bo
 ### 1. Build
 
 ```bash
-go build -o wcc ./cmd/wcc/
+go build -o wcca ./cmd/wcca/
 ```
 
 ### 2. Configure
@@ -140,12 +140,12 @@ ollama serve
 
 ```bash
 # Foreground
-./wcc run --config config.yaml
+./wcca run --config config.yaml
 
 # Or install as a system service
-./wcc install --config config.yaml
-./wcc status
-./wcc uninstall
+./wcca install --config config.yaml
+./wcca status
+./wcca uninstall
 ```
 
 ## Connection Modes
@@ -299,11 +299,11 @@ health:
 ## CLI Commands
 
 ```
-wcc run        Start the agent in the foreground
-wcc install    Install as a system service and start it
-wcc uninstall  Stop and remove the system service
-wcc status     Show service status
-wcc version    Print version information
+wcca run        Start the agent in the foreground
+wcca install    Install as a system service and start it
+wcca uninstall  Stop and remove the system service
+wcca status     Show service status
+wcca version    Print version information
 
 Flags:
   --config string   Path to config file (default "config.yaml")
@@ -313,7 +313,7 @@ Flags:
 
 ```bash
 # Build
-go build ./cmd/wcc/
+go build ./cmd/wcca/
 
 # Run all tests with race detector
 go test -race -count=1 ./...

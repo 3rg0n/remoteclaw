@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ecopelan/wcc/internal/ai"
+	"github.com/ecopelan/wcca/internal/ai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

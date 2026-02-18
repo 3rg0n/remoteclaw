@@ -1,4 +1,4 @@
-module github.com/ecopelan/wcc
+module github.com/ecopelan/wcca
 
 go 1.26.0
 

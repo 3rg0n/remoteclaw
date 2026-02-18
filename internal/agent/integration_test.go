@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ecopelan/wcc/internal/ai"
-	"github.com/ecopelan/wcc/internal/config"
-	"github.com/ecopelan/wcc/internal/connect"
-	"github.com/ecopelan/wcc/internal/executor"
-	"github.com/ecopelan/wcc/internal/logging"
-	"github.com/ecopelan/wcc/internal/security"
+	"github.com/ecopelan/wcca/internal/ai"
+	"github.com/ecopelan/wcca/internal/config"
+	"github.com/ecopelan/wcca/internal/connect"
+	"github.com/ecopelan/wcca/internal/executor"
+	"github.com/ecopelan/wcca/internal/logging"
+	"github.com/ecopelan/wcca/internal/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

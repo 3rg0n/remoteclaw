@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/ecopelan/wcc/internal/logging"
+	"github.com/ecopelan/wcca/internal/logging"
 	"github.com/ollama/ollama/api"
 )
 

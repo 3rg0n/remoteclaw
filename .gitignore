@@ -1,6 +1,6 @@
 # Binaries
-wcc
-wcc.exe
+wcca
+wcca.exe
 *.exe
 *.dll
 *.so
@@ -23,14 +23,24 @@ coverage.html
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 
 # Config with secrets
 config.yaml
 config.yml
 !config/config.example.yaml
+.env
+.env.*
+!.env.example
+
+# Audit logs
+*.jsonl
 
 # Build
 bin/
 
 # Plan files
 .plan/
+
+# Go
+vendor/
