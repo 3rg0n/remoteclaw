@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/ecopelan/wcc/internal/security"
 )
 
 // ToolResult holds the result of a tool execution
@@ -15,9 +17,10 @@ type ToolResult struct {
 
 // Executor dispatches tool calls to handlers
 type Executor struct {
-	defaultTimeout time.Duration
-	maxTimeout     time.Duration
-	shell          string
+	defaultTimeout    time.Duration
+	maxTimeout        time.Duration
+	shell             string
+	dangerousChecker  *security.DangerousChecker
 }
 
 // New creates a new Executor with the given configuration.
@@ -32,10 +35,39 @@ func New(defaultTimeout, maxTimeout time.Duration, shell string) *Executor {
 	}
 }
 
+// SetDangerousChecker enables dangerous command checking on execute_command calls.
+func (e *Executor) SetDangerousChecker(dc *security.DangerousChecker) {
+	e.dangerousChecker = dc
+}
+
 // Execute dispatches a tool call to the appropriate handler.
 // toolName specifies which tool to call, and params are the tool arguments.
 // Returns a ToolResult with the tool output or error information.
 func (e *Executor) Execute(ctx context.Context, toolName string, params map[string]any) (*ToolResult, error) {
+	// Check dangerous commands before executing
+	if toolName == "execute_command" && e.dangerousChecker != nil {
+		if cmd, ok := params["command"].(string); ok {
+			if blocked, reason := e.dangerousChecker.Check(cmd); blocked {
+				return &ToolResult{
+					Output:   "",
+					Error:    fmt.Sprintf("Command blocked: %s", reason),
+					ExitCode: 1,
+				}, nil
+			}
+		}
+	}
+
+	return e.dispatch(ctx, toolName, params)
+}
+
+// ForceExecuteCommand runs a command bypassing the dangerous command checker.
+// Used only after a challenge-response confirmation.
+func (e *Executor) ForceExecuteCommand(ctx context.Context, command string) (*ToolResult, error) {
+	return e.executeCommand(ctx, map[string]any{"command": command})
+}
+
+// dispatch routes a tool call to the appropriate handler.
+func (e *Executor) dispatch(ctx context.Context, toolName string, params map[string]any) (*ToolResult, error) {
 	switch toolName {
 	case "execute_command":
 		return e.executeCommand(ctx, params)

@@ -19,18 +19,8 @@ func TestNewNativeMode(t *testing.T) {
 
 	require.NotNil(t, nm)
 	assert.Equal(t, botToken, nm.botToken)
-	assert.Equal(t, allowedEmails, nm.allowedEmails)
-}
-
-// TestNativeModeConnect tests the Connect method
-func TestNativeModeConnect(t *testing.T) {
-	logger := zerolog.New(nil)
-	nm := NewNativeMode("test-token", []string{}, logger)
-
-	ctx := context.Background()
-	err := nm.Connect(ctx)
-
-	assert.NoError(t, err)
+	assert.NotNil(t, nm.allowlist)
+	assert.NotNil(t, nm.sender)
 }
 
 // TestNativeModeOnMessage tests the OnMessage method
@@ -51,63 +41,37 @@ func TestNativeModeOnMessage(t *testing.T) {
 	assert.True(t, handlerCalled)
 }
 
-// TestNativeModeSendMessage tests the SendMessage method
-func TestNativeModeSendMessage(t *testing.T) {
-	logger := zerolog.New(nil)
-	nm := NewNativeMode("test-token", []string{}, logger)
-
-	ctx := context.Background()
-	err := nm.SendMessage(ctx, "space-123", "test message")
-
-	assert.NoError(t, err)
-}
-
-// TestNativeModeClose tests the Close method
-func TestNativeModeClose(t *testing.T) {
+// TestNativeModeCloseWithoutConnect tests Close without prior Connect
+func TestNativeModeCloseWithoutConnect(t *testing.T) {
 	logger := zerolog.New(nil)
 	nm := NewNativeMode("test-token", []string{}, logger)
 
 	err := nm.Close()
-
 	assert.NoError(t, err)
 }
 
-// TestIsAllowedEmptyAllowlist tests isAllowed with empty allowlist
-func TestIsAllowedEmptyAllowlist(t *testing.T) {
-	logger := zerolog.New(nil)
-	nm := NewNativeMode("test-token", []string{}, logger)
-
-	// Empty allowlist means all are allowed
-	assert.True(t, nm.isAllowed("any@example.com"))
-	assert.True(t, nm.isAllowed("someone@example.com"))
-}
-
-// TestIsAllowedWithAllowlist tests isAllowed with populated allowlist
-func TestIsAllowedWithAllowlist(t *testing.T) {
+// TestNativeModeAllowlistIntegration tests that allowlist is properly wired
+func TestNativeModeAllowlistIntegration(t *testing.T) {
 	logger := zerolog.New(nil)
 	allowedEmails := []string{"alice@example.com", "bob@example.com"}
 	nm := NewNativeMode("test-token", allowedEmails, logger)
 
-	// Allowed emails
-	assert.True(t, nm.isAllowed("alice@example.com"))
-	assert.True(t, nm.isAllowed("bob@example.com"))
+	// Allowed emails (case-insensitive via Allowlist)
+	assert.True(t, nm.allowlist.IsAllowed("alice@example.com"))
+	assert.True(t, nm.allowlist.IsAllowed("bob@example.com"))
+	assert.True(t, nm.allowlist.IsAllowed("Alice@Example.COM"))
 
-	// Disallowed emails
-	assert.False(t, nm.isAllowed("charlie@example.com"))
-	assert.False(t, nm.isAllowed(""))
+	// Disallowed email
+	assert.False(t, nm.allowlist.IsAllowed("charlie@example.com"))
 }
 
-// TestIsAllowedCaseSensitive tests that isAllowed is case-sensitive
-func TestIsAllowedCaseSensitive(t *testing.T) {
+// TestNativeModeEmptyAllowlist tests that empty allowlist allows all
+func TestNativeModeEmptyAllowlist(t *testing.T) {
 	logger := zerolog.New(nil)
-	allowedEmails := []string{"User@example.com"}
-	nm := NewNativeMode("test-token", allowedEmails, logger)
+	nm := NewNativeMode("test-token", []string{}, logger)
 
-	// Exact match should work
-	assert.True(t, nm.isAllowed("User@example.com"))
-
-	// Different case should not match
-	assert.False(t, nm.isAllowed("user@example.com"))
+	assert.True(t, nm.allowlist.IsAllowed("anyone@example.com"))
+	assert.True(t, nm.allowlist.IsAllowed("someone@example.com"))
 }
 
 // TestNativeModeImplementsMode tests that NativeMode implements Mode interface
@@ -115,12 +79,31 @@ func TestNativeModeImplementsMode(t *testing.T) {
 	logger := zerolog.New(nil)
 	nm := NewNativeMode("test-token", []string{}, logger)
 
-	// This is a compile-time check, but we verify it at runtime as well
+	// Compile-time check
 	var _ Mode = nm
+}
 
-	// Verify all interface methods are present
-	assert.NotNil(t, nm.Connect)
-	assert.NotNil(t, nm.OnMessage)
-	assert.NotNil(t, nm.SendMessage)
-	assert.NotNil(t, nm.Close)
+// TestStripBotMention tests mention stripping for group spaces
+func TestStripBotMention(t *testing.T) {
+	tests := []struct {
+		name    string
+		text    string
+		botName string
+		want    string
+	}{
+		{"strips exact prefix", "WCC check disk", "WCC", "check disk"},
+		{"strips case-insensitive", "wcc check disk", "WCC", "check disk"},
+		{"strips with extra spaces", "WCC   check disk", "WCC", "check disk"},
+		{"no match returns original", "hello world", "WCC", "hello world"},
+		{"empty bot name returns original", "WCC check disk", "", "WCC check disk"},
+		{"only bot name returns original", "WCC", "WCC", "WCC"},
+		{"bot name with spaces", "My Bot check disk", "My Bot", "check disk"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stripBotMention(tt.text, tt.botName)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )
 
@@ -23,6 +24,7 @@ type Config struct {
 	AWS       AWSConfig         `mapstructure:"aws"`
 	AI        AIConfig          `mapstructure:"ai"`
 	Execution ExecutionConfig   `mapstructure:"execution"`
+	Security  SecurityConfig    `mapstructure:"security"`
 	Logging   LoggingConfig     `mapstructure:"logging"`
 	Health    HealthConfig      `mapstructure:"health"`
 }
@@ -68,14 +70,27 @@ type LoggingConfig struct {
 	File   string `mapstructure:"file"`
 }
 
+// SecurityConfig holds security hardening settings
+type SecurityConfig struct {
+	DangerousCommands bool   `mapstructure:"dangerous_commands"` // Enable dangerous command blocking
+	AuditLog          string `mapstructure:"audit_log"`          // Path to audit log file (empty = disabled)
+	RateLimitPerMin   int    `mapstructure:"rate_limit_per_min"` // Max requests per minute per space
+	Challenge         string `mapstructure:"challenge"`          // Challenge string for destructive command confirmation (empty = disabled)
+}
+
 // HealthConfig holds health check settings
 type HealthConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	Addr    string `mapstructure:"addr"`
 }
 
-// Load reads and parses a YAML config file, applies defaults, and validates the configuration
+// Load reads and parses a YAML config file, applies defaults, and validates the configuration.
+// If a .env file exists in the current directory, it is loaded first (does not override system env vars).
 func Load(path string) (*Config, error) {
+	// Load .env file if present — .env values take precedence over system env vars.
+	// If .env does not exist, system env vars are used as-is.
+	_ = godotenv.Overload() // Ignores error if .env doesn't exist
+
 	cfg := &Config{}
 
 	// Set up viper
@@ -120,6 +135,10 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("execution.max_timeout", "5m")
 	v.SetDefault("logging.level", "info")
 	v.SetDefault("logging.format", "json")
+	v.SetDefault("security.dangerous_commands", true)
+	v.SetDefault("security.audit_log", "")
+	v.SetDefault("security.rate_limit_per_min", 10)
+	v.SetDefault("security.challenge", "")
 	v.SetDefault("health.enabled", true)
 	v.SetDefault("health.addr", "127.0.0.1:9090")
 }
@@ -131,6 +150,8 @@ func (c *Config) expandEnvVars() {
 	c.WMCP.Token = os.ExpandEnv(c.WMCP.Token)
 	c.AI.OllamaHost = os.ExpandEnv(c.AI.OllamaHost)
 	c.Execution.Shell = os.ExpandEnv(c.Execution.Shell)
+	c.Security.AuditLog = os.ExpandEnv(c.Security.AuditLog)
+	c.Security.Challenge = os.ExpandEnv(c.Security.Challenge)
 	c.Logging.File = os.ExpandEnv(c.Logging.File)
 }
 

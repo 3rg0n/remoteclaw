@@ -46,6 +46,27 @@ func (a *Allowlist) IsAllowed(email string) bool {
 	return a.emails[normalizedEmail]
 }
 
+// IsAllowedInRoom checks if the email is allowed in a group room.
+// Unlike IsAllowed, this enforces strict matching even when the allowlist is empty:
+// in group rooms, an empty allowlist means no one is authorized.
+// roomType should be "group" for rooms or "direct" for 1:1 spaces.
+func (a *Allowlist) IsAllowedInRoom(email string, roomType string) bool {
+	if roomType != "group" {
+		return a.IsAllowed(email)
+	}
+
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	// In group rooms, require explicit allowlist entry
+	if len(a.emails) == 0 {
+		return false
+	}
+
+	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
+	return a.emails[normalizedEmail]
+}
+
 // Reload updates the allowlist with a new set of emails.
 // Thread-safe.
 func (a *Allowlist) Reload(emails []string) {

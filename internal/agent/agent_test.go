@@ -303,9 +303,10 @@ func TestMessageHandlerProcessing(t *testing.T) {
 	})
 
 	agent := &Agent{
-		logger:    logging.Get(),
-		processor: processor,
-		mode:      &MockMode{},
+		logger:        logging.Get(),
+		processor:     processor,
+		mode:          &MockMode{},
+		conversations: NewConversationManager(20),
 		cfg: &config.Config{
 			Logging: config.LoggingConfig{
 				Level: "info",
@@ -397,9 +398,10 @@ func TestMessageHandlerError(t *testing.T) {
 
 	mockMode := &MockMode{}
 	agent := &Agent{
-		logger:    logging.Get(),
-		processor: processor,
-		mode:      mockMode,
+		logger:        logging.Get(),
+		processor:     processor,
+		mode:          mockMode,
+		conversations: NewConversationManager(20),
 		cfg: &config.Config{
 			Logging: config.LoggingConfig{
 				Level: "info",

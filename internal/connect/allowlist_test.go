@@ -120,6 +120,39 @@ func TestAllowlist_ConcurrentAccess(t *testing.T) {
 	assert.True(t, allowlist.IsAllowed("admin@example.com"))
 }
 
+func TestAllowlist_IsAllowedInRoom_GroupEmpty(t *testing.T) {
+	// Empty allowlist in group room should deny all
+	allowlist := NewAllowlist(nil)
+	assert.False(t, allowlist.IsAllowedInRoom("anyone@example.com", "group"))
+}
+
+func TestAllowlist_IsAllowedInRoom_GroupPopulated(t *testing.T) {
+	allowlist := NewAllowlist([]string{"alice@example.com", "bob@example.com"})
+
+	assert.True(t, allowlist.IsAllowedInRoom("alice@example.com", "group"))
+	assert.True(t, allowlist.IsAllowedInRoom("bob@example.com", "group"))
+	assert.False(t, allowlist.IsAllowedInRoom("charlie@example.com", "group"))
+}
+
+func TestAllowlist_IsAllowedInRoom_DirectEmpty(t *testing.T) {
+	// Empty allowlist in direct space should allow all (same as IsAllowed)
+	allowlist := NewAllowlist(nil)
+	assert.True(t, allowlist.IsAllowedInRoom("anyone@example.com", "direct"))
+}
+
+func TestAllowlist_IsAllowedInRoom_DirectPopulated(t *testing.T) {
+	allowlist := NewAllowlist([]string{"alice@example.com"})
+
+	assert.True(t, allowlist.IsAllowedInRoom("alice@example.com", "direct"))
+	assert.False(t, allowlist.IsAllowedInRoom("bob@example.com", "direct"))
+}
+
+func TestAllowlist_IsAllowedInRoom_EmptyRoomType(t *testing.T) {
+	// Empty room type should behave like direct (legacy/1:1)
+	allowlist := NewAllowlist(nil)
+	assert.True(t, allowlist.IsAllowedInRoom("anyone@example.com", ""))
+}
+
 func TestAllowlist_ConcurrentReload(t *testing.T) {
 	allowlist := NewAllowlist([]string{"user@example.com"})
 

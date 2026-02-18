@@ -12,6 +12,7 @@ type IncomingMessage struct {
 	PersonID string
 	Email    string
 	Text     string
+	RoomType string // "direct", "group", or empty
 }
 
 // Mode is the interface for connection modes
