@@ -39,26 +39,55 @@ WCC is a local agent that lets you remotely control a system via a Webex bot, po
 
 WCC uses a **Webex Bot**, not an Integration. Bots use a simple access token — no OAuth redirect URIs or scopes required.
 
-> **The Integration page (with scopes, redirect URIs, etc.) is NOT what you need.** That is for OAuth-based integrations. WCC needs a Bot.
+When you go to [developer.webex.com](https://developer.webex.com) → **Create a New App**, you'll see several options:
+
+| App Type | What it's for | WCC? |
+|----------|--------------|------|
+| **Bot** | Chatbots that post content and respond to commands | **Yes — use this** |
+| Integration | OAuth apps that act on behalf of a user (requires scopes, redirect URIs) | No |
+| Service App | Org-wide privileged automation | No |
+| Embedded App | Apps embedded in Webex Meetings/Spaces UI | No |
+| Guest Issuer | Temporary access for non-Webex users | No |
 
 ### Step-by-step
 
 1. Go to [developer.webex.com/my-apps](https://developer.webex.com/my-apps)
 2. Click **Create a New App**
-3. Select **Create a Bot** (not "Create an Integration")
+3. Select **Create a Bot**
 4. Fill in the form:
    - **Bot Name** — Display name shown in Webex (e.g., "WCC Remote Hands")
-   - **Bot Username** — Unique identifier, becomes `username@webex.bot` (e.g., `wcc-prod`)
+   - **Bot Username** — Unique identifier, becomes `username@webex.bot` (e.g., `wcc-prod`). Cannot be changed later.
    - **Icon** — Upload a 512x512 PNG/JPEG or pick a default
-   - **Description** — e.g., "AI-powered remote system administration"
+   - **App Hub Description** — e.g., "AI-powered remote system administration"
 5. Click **Add Bot**
 6. **Copy the Bot Access Token** — this is shown only once. If you lose it, you'll need to regenerate it from the bot's settings page.
 
 This token goes into your `.env` file or config as `WEBEX_BOT_TOKEN`.
 
+### Where to Create the Bot
+
+There are two approaches depending on your situation:
+
+#### Option A: Work Org (if your organization allows it)
+
+If your company permits creating bots on [developer.webex.com](https://developer.webex.com), log in with your **work email** and create the bot there. The bot lives in your org, and anyone in your org can find and message it.
+
+#### Option B: Personal Account (cross-org)
+
+If your work org restricts bot creation, you can create the bot under a **personal Webex account**:
+
+1. Sign up at [developer.webex.com](https://developer.webex.com) with a personal email (Gmail, etc.)
+2. Create the bot under that account
+3. Run WCC at home (or wherever) with that bot token
+4. From your **work Webex client**, search for `yourbotname@webex.bot` and DM it
+
+Webex bots are globally addressable — any Webex user can direct-message any bot regardless of which org created it. Set `allowed_emails` to your work email so only you can use it.
+
+> **Note**: Some organizations disable external communications in Webex Control Hub. If your IT admin has blocked messaging outside your org, cross-org bots won't work. Test by trying to message any external Webex user first.
+
 ### Adding the Bot to a Space
 
-- **Direct messages (1:1)**: Search for the bot by its username in Webex and send it a message directly.
+- **Direct messages (1:1)**: Search for the bot by its `@webex.bot` username in Webex and send it a message directly.
 - **Group spaces**: Add the bot to a room as a member. In group rooms, you must @mention the bot to trigger it (e.g., `@WCC Remote Hands check disk space`). The bot automatically strips the mention before processing.
 
 > **Group room restriction**: When the bot is in a group room, only users listed in `allowed_emails` can interact with it. If no `allowed_emails` are configured, the bot will not respond to anyone in group rooms.
