@@ -9,7 +9,7 @@ LDFLAGS := -ldflags "-s -w \
 	-X $(MODULE)/internal/config.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/config.Date=$(DATE)"
 
-.PHONY: build test test-unit lint run clean build-all fmt vet
+.PHONY: build test test-unit lint run clean build-all fmt vet release
 
 build:
 	go build $(LDFLAGS) -o bin/$(BINARY) ./cmd/wcca
@@ -39,3 +39,8 @@ build-all: clean
 	GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY)-linux-amd64   ./cmd/wcca
 	GOOS=darwin  GOARCH=arm64 go build $(LDFLAGS) -o dist/$(BINARY)-darwin-arm64   ./cmd/wcca
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o dist/$(BINARY)-windows-amd64.exe ./cmd/wcca
+
+release: clean build-all
+	mkdir -p release
+	cp dist/* release/
+	cd release && sha256sum * > CHECKSUMS.txt 2>/dev/null || true

@@ -94,6 +94,24 @@ Webex bots are globally addressable — any Webex user can direct-message any bo
 
 ## Quick Start
 
+### Automated Install
+
+**Linux/macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ecopelan/wcca/main/install.sh | bash
+```
+
+**Windows (PowerShell as Admin):**
+
+```powershell
+irm https://raw.githubusercontent.com/ecopelan/wcca/main/install.ps1 | iex
+```
+
+The installer downloads the binary, installs Ollama + model, walks you through configuration, and registers WCCA as a system service.
+
+### Manual Install
+
 ### 1. Build
 
 ```bash
@@ -307,6 +325,31 @@ wcca version    Print version information
 
 Flags:
   --config string   Path to config file (default "config.yaml")
+```
+
+## Uninstall
+
+**Linux:**
+
+```bash
+wcca uninstall
+sudo rm /usr/local/bin/wcca
+sudo rm -rf /etc/wcca/
+```
+
+**macOS:**
+
+```bash
+wcca uninstall
+sudo rm /usr/local/bin/wcca
+sudo rm -rf /usr/local/etc/wcca/
+```
+
+**Windows (PowerShell as Admin):**
+
+```powershell
+wcca uninstall
+Remove-Item "C:\ProgramData\wcca" -Recurse -Force
 ```
 
 ## Development
