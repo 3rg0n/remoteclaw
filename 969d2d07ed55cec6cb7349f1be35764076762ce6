@@ -1,0 +1,47 @@
+CLAUDE.md
+  0dcea96d7357c198 7,11-12,23,27,35,46
+go.mod
+  0dcea96d7357c198 1
+install.ps1
+  0dcea96d7357c198 1-2,6,10-11,55,69,78,91,222,231-233,235-250,272-273,297-302,322,370-371,378,389,392,411-413,421,442
+Makefile
+  0dcea96d7357c198 1-2
+install.sh
+  0dcea96d7357c198 4-5,7,53-54,56-57,60,84,96,100,112,183-220,224,237-255,276,278,284-298,324,370,374,383,385,403-405,407,409,417
+README.md
+  0dcea96d7357c198 352
+.gitignore
+  0dcea96d7357c198 2-3
+internal/ai/prompt.go
+  0dcea96d7357c198 7
+config/config.example.yaml
+  0dcea96d7357c198 1,45-46
+internal/security/challenge.go
+  0dcea96d7357c198 4-10,13-14,20-30,41-43,45,50-52,54,57,65,80-83,85-90,134-169,171-231
+internal/security/challenge_test.go
+  0dcea96d7357c198 20,22-61,63-67,72,76-77,83,88-90,92,95-96,99-100,106-108,110,118,123-125,127,131,137-139,141,145,148-159
+internal/agent/integration_test.go
+  0dcea96d7357c198 330-332,334,354,378
+internal/agent/agent.go
+  0dcea96d7357c198 144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "969d2d07ed55cec6cb7349f1be35764076762ce6",
+  "prompts": {
+    "0dcea96d7357c198": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c467305-fba0-414d-9d4a-276b1fca0a09",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 408,
+      "total_deletions": 117,
+      "accepted_lines": 400,
+      "overriden_lines": 1
+    }
+  }
+}
