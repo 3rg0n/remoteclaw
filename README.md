@@ -1,13 +1,13 @@
-# WCCA — Webex Command and Control Agent
+# RemoteClaw — AI-powered remote system control via Webex
 
-WCCA is a local agent that lets you remotely control a system via a Webex bot, powered by AI. Send natural language commands through Webex (e.g., "restart the nginx service", "check disk usage") and the AI interprets them, executes them on the local machine, and reports back the results.
+RemoteClaw is a local agent that lets you remotely control a system via a Webex bot, powered by AI. Send natural language commands through Webex (e.g., "restart the nginx service", "check disk usage") and the AI interprets them, executes them on the local machine, and reports back the results.
 
 ## How It Works
 
 ```
  Webex User                    Webex Cloud                   Local Machine
 ┌──────────┐   message    ┌─────────────────┐  Mercury WS  ┌──────────────┐
-│  Webex    │─────────────►│  Webex Messaging │─────────────►│   WCCA Agent  │
+│  Webex    │─────────────►│  Webex Messaging │─────────────►│   RemoteClaw  │
 │  Client   │◄─────────────│  Platform        │◄─────────────│              │
 └──────────┘   response   └─────────────────┘   REST API   │  ┌────────┐  │
                                                             │  │ AI     │  │
@@ -22,7 +22,7 @@ WCCA is a local agent that lets you remotely control a system via a Webex bot, p
 ```
 
 1. You message the Webex bot (e.g., "check disk space")
-2. WCCA receives the message via Mercury WebSocket
+2. RemoteClaw receives the message via Mercury WebSocket
 3. The AI engine interprets the request and decides which commands to run
 4. Commands execute locally with safety checks
 5. Results are sent back through Webex
@@ -37,11 +37,11 @@ WCCA is a local agent that lets you remotely control a system via a Webex bot, p
 
 ## Creating a Webex Bot Token
 
-WCCA uses a **Webex Bot**, not an Integration. Bots use a simple access token — no OAuth redirect URIs or scopes required.
+RemoteClaw uses a **Webex Bot**, not an Integration. Bots use a simple access token — no OAuth redirect URIs or scopes required.
 
 When you go to [developer.webex.com](https://developer.webex.com) → **Create a New App**, you'll see several options:
 
-| App Type | What it's for | WCCA? |
+| App Type | What it's for | Use? |
 |----------|--------------|------|
 | **Bot** | Chatbots that post content and respond to commands | **Yes — use this** |
 | Integration | OAuth apps that act on behalf of a user (requires scopes, redirect URIs) | No |
@@ -55,8 +55,8 @@ When you go to [developer.webex.com](https://developer.webex.com) → **Create a
 2. Click **Create a New App**
 3. Select **Create a Bot**
 4. Fill in the form:
-   - **Bot Name** — Display name shown in Webex (e.g., "WCCA Remote Hands")
-   - **Bot Username** — Unique identifier, becomes `username@webex.bot` (e.g., `wcc-prod`). Cannot be changed later.
+   - **Bot Name** — Display name shown in Webex (e.g., "RemoteClaw")
+   - **Bot Username** — Unique identifier, becomes `username@webex.bot` (e.g., `remoteclaw-prod`). Cannot be changed later.
    - **Icon** — Upload a 512x512 PNG/JPEG or pick a default
    - **App Hub Description** — e.g., "AI-powered remote system administration"
 5. Click **Add Bot**
@@ -78,7 +78,7 @@ If your work org restricts bot creation, you can create the bot under a **person
 
 1. Sign up at [developer.webex.com](https://developer.webex.com) with a personal email (Gmail, etc.)
 2. Create the bot under that account
-3. Run WCC at home (or wherever) with that bot token
+3. Run RemoteClaw at home (or wherever) with that bot token
 4. From your **work Webex client**, search for `yourbotname@webex.bot` and DM it
 
 Webex bots are globally addressable — any Webex user can direct-message any bot regardless of which org created it. Set `allowed_emails` to your work email so only you can use it.
@@ -88,7 +88,7 @@ Webex bots are globally addressable — any Webex user can direct-message any bo
 ### Adding the Bot to a Space
 
 - **Direct messages (1:1)**: Search for the bot by its `@webex.bot` username in Webex and send it a message directly.
-- **Group spaces**: Add the bot to a room as a member. In group rooms, you must @mention the bot to trigger it (e.g., `@WCC Remote Hands check disk space`). The bot automatically strips the mention before processing.
+- **Group spaces**: Add the bot to a room as a member. In group rooms, you must @mention the bot to trigger it (e.g., `@RemoteClaw check disk space`). The bot automatically strips the mention before processing.
 
 > **Group room restriction**: When the bot is in a group room, only users listed in `allowed_emails` can interact with it. If no `allowed_emails` are configured, the bot will not respond to anyone in group rooms.
 
@@ -99,23 +99,23 @@ Webex bots are globally addressable — any Webex user can direct-message any bo
 **Linux/macOS:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ecopelan/wcca/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ecopelan/remoteclaw/main/install.sh | bash
 ```
 
 **Windows (PowerShell as Admin):**
 
 ```powershell
-irm https://raw.githubusercontent.com/ecopelan/wcca/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/ecopelan/remoteclaw/main/install.ps1 | iex
 ```
 
-The installer downloads the binary, installs Ollama + model, walks you through configuration, and registers WCCA as a system service.
+The installer downloads the binary, installs Ollama + model, walks you through configuration, and registers RemoteClaw as a system service.
 
 ### Manual Install
 
 ### 1. Build
 
 ```bash
-go build -o wcca ./cmd/wcca/
+go build -o remoteclaw ./cmd/remoteclaw/
 ```
 
 ### 2. Configure
@@ -130,7 +130,7 @@ Create a `.env` file in the working directory:
 
 ```bash
 WEBEX_BOT_TOKEN=YourBotAccessTokenHere
-# CHALLENGE=my-secret-confirm-code  # Optional: require this string to confirm destructive commands
+# CHALLENGE=<encrypted>             # Optional: AES-256-GCM encrypted challenge (user replies with passphrase)
 # AWS_ACCESS_KEY_ID=...             # Optional: enables Bedrock AI provider
 # AWS_SECRET_ACCESS_KEY=...
 ```
@@ -151,19 +151,19 @@ webex:
 
 ```bash
 ollama serve
-# WCC auto-pulls the model on first run
+# RemoteClaw auto-pulls the model on first run
 ```
 
 ### 4. Run
 
 ```bash
 # Foreground
-./wcca run --config config.yaml
+./remoteclaw run --config config.yaml
 
 # Or install as a system service
-./wcca install --config config.yaml
-./wcca status
-./wcca uninstall
+./remoteclaw install --config config.yaml
+./remoteclaw status
+./remoteclaw uninstall
 ```
 
 ## Connection Modes
@@ -182,7 +182,7 @@ webex:
 
 ### WMCP Mode
 
-Connects through a WMCP (Webex Message Control Protocol) relay server. Useful when multiple WCC agents need to be managed through a central backend.
+Connects through a WMCP (Webex Message Control Protocol) relay server. Useful when multiple RemoteClaw agents need to be managed through a central backend.
 
 ```yaml
 mode: wmcp
@@ -218,18 +218,18 @@ When a command is blocked, the AI is told why and relays the explanation to the 
 
 ### Challenge-Response Confirmation
 
-When `CHALLENGE` is set in `.env`, destructive commands aren't immediately blocked — instead the user is prompted to reply with the exact challenge string to confirm execution. The confirmation expires after 2 minutes.
+When `CHALLENGE` is set (as an AES-256-GCM encrypted blob), destructive commands prompt the user to reply with the decryption passphrase to confirm execution. The confirmation expires after 2 minutes.
 
 ```bash
 # .env
-CHALLENGE=confirm-delete-2026
+CHALLENGE=<AES-256-GCM encrypted blob>
 ```
 
 Flow:
 1. User: "delete all log files older than 30 days"
 2. AI tries `rm -rf /var/log/old/` — command is flagged
-3. Bot: "This command requires confirmation. Reply with the challenge code to proceed."
-4. User: `confirm-delete-2026`
+3. Bot: "This command requires confirmation. Reply with the decryption passphrase to proceed."
+4. User: <passphrase that decrypts the challenge>
 5. Command executes and results are returned
 
 ### Rate Limiting
@@ -262,7 +262,7 @@ When enabled, writes NDJSON audit entries to date-stamped files with automatic 3
 
 ```yaml
 security:
-  audit_log: "/var/log/wcc/audit"  # Creates audit-2026-02-18.jsonl, etc.
+  audit_log: "/var/log/remoteclaw/audit"  # Creates audit-2026-02-18.jsonl, etc.
 ```
 
 Each entry records: timestamp, email, space ID, raw message, tool calls made, response, duration, and any errors.
@@ -297,7 +297,7 @@ security:
   dangerous_commands: true          # Enable dangerous command blocking
   audit_log: ""                     # Audit log base path (empty = disabled)
   rate_limit_per_min: 10            # Requests per minute per space (0 = disabled)
-  challenge: "${CHALLENGE}"         # Challenge string for destructive confirmation (empty = disabled)
+  challenge: "${CHALLENGE}"         # AES-256-GCM encrypted challenge (passphrase = decryption key) (empty = disabled)
 
 execution:
   default_timeout: "30s"            # Default command timeout
@@ -317,11 +317,11 @@ health:
 ## CLI Commands
 
 ```
-wcca run        Start the agent in the foreground
-wcca install    Install as a system service and start it
-wcca uninstall  Stop and remove the system service
-wcca status     Show service status
-wcca version    Print version information
+remoteclaw run        Start the agent in the foreground
+remoteclaw install    Install as a system service and start it
+remoteclaw uninstall  Stop and remove the system service
+remoteclaw status     Show service status
+remoteclaw version    Print version information
 
 Flags:
   --config string   Path to config file (default "config.yaml")
@@ -332,31 +332,31 @@ Flags:
 **Linux:**
 
 ```bash
-wcca uninstall
-sudo rm /usr/local/bin/wcca
-sudo rm -rf /etc/wcca/
+remoteclaw uninstall
+sudo rm /usr/local/bin/remoteclaw
+sudo rm -rf /etc/remoteclaw/
 ```
 
 **macOS:**
 
 ```bash
-wcca uninstall
-sudo rm /usr/local/bin/wcca
-sudo rm -rf /usr/local/etc/wcca/
+remoteclaw uninstall
+sudo rm /usr/local/bin/remoteclaw
+sudo rm -rf /usr/local/etc/remoteclaw/
 ```
 
 **Windows (PowerShell as Admin):**
 
 ```powershell
-wcca uninstall
-Remove-Item "C:\ProgramData\wcca" -Recurse -Force
+remoteclaw uninstall
+Remove-Item "C:\ProgramData\remoteclaw" -Recurse -Force
 ```
 
 ## Development
 
 ```bash
 # Build
-go build ./cmd/wcca/
+go build ./cmd/remoteclaw/
 
 # Run all tests with race detector
 go test -race -count=1 ./...

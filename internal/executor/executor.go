@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ecopelan/wcca/internal/security"
+	"github.com/ecopelan/remoteclaw/internal/security"
 )
 
 // ToolResult holds the result of a tool execution

@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ecopelan/wcca/internal/ai"
-	"github.com/ecopelan/wcca/internal/config"
-	"github.com/ecopelan/wcca/internal/connect"
-	"github.com/ecopelan/wcca/internal/executor"
-	"github.com/ecopelan/wcca/internal/logging"
-	"github.com/ecopelan/wcca/internal/security"
+	"github.com/ecopelan/remoteclaw/internal/ai"
+	"github.com/ecopelan/remoteclaw/internal/config"
+	"github.com/ecopelan/remoteclaw/internal/connect"
+	"github.com/ecopelan/remoteclaw/internal/executor"
+	"github.com/ecopelan/remoteclaw/internal/logging"
+	"github.com/ecopelan/remoteclaw/internal/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -327,9 +327,11 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 	callCount := 0
 	mode := &CapturingMode{}
 
-	// Create agent with challenge enabled
+	// Create agent with AES-256 encrypted challenge
+	encrypted, err := security.EncryptChallenge("confirm-it")
+	require.NoError(t, err)
 	agent := newTestAgent(t, nil, func(a *Agent) {
-		a.challengeStore = security.NewChallengeStore("confirm-it")
+		a.challengeStore = security.NewChallengeStore(encrypted)
 	})
 
 	// Override processor with a sequential converser:
@@ -349,7 +351,7 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 				},
 				{
 					Role:    "assistant",
-					Content: []ai.ContentBlock{{Type: "text", Text: "The command requires confirmation. Please reply with the challenge code to proceed."}},
+					Content: []ai.ContentBlock{{Type: "text", Text: "The command requires confirmation. Please reply with the decryption passphrase to proceed."}},
 				},
 			},
 			callCount: &callCount,
@@ -373,7 +375,7 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 						agent.challengeStore.SetPending(spaceID, cmd, result.Error)
 					}
 				}
-				return "Command blocked. User must reply with challenge code to confirm.", nil
+				return "Command blocked. User must reply with decryption passphrase to confirm.", nil
 			}
 			output := result.Output
 			if result.Error != "" {

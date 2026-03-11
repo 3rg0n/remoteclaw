@@ -12,11 +12,11 @@ type Config struct {
 	Name        string // service name
 	DisplayName string // human-readable display name
 	Description string // service description
-	ConfigPath  string // path to WCC config file
-	BinaryPath  string // path to WCC binary (empty = current executable)
+	ConfigPath  string // path to config file
+	BinaryPath  string // path to binary (empty = current executable)
 }
 
-// Manager wraps kardianos/service for WCC service management
+// Manager wraps kardianos/service for service management
 type Manager struct {
 	svc service.Service
 }
@@ -42,13 +42,13 @@ func (p *program) Stop(s service.Service) error {
 func New(cfg Config) (*Manager, error) {
 	// Set defaults
 	if cfg.Name == "" {
-		cfg.Name = "wcca"
+		cfg.Name = "remoteclaw"
 	}
 	if cfg.DisplayName == "" {
-		cfg.DisplayName = "WCC Agent"
+		cfg.DisplayName = "RemoteClaw Agent"
 	}
 	if cfg.Description == "" {
-		cfg.Description = "Webex Command and Control Agent"
+		cfg.Description = "RemoteClaw — AI-powered remote system control via Webex"
 	}
 
 	// Get binary path

@@ -9,7 +9,7 @@ import (
 
 func TestNew_DefaultValues(t *testing.T) {
 	cfg := Config{
-		ConfigPath: "/etc/wcc/config.yaml",
+		ConfigPath: "/etc/remoteclaw/config.yaml",
 	}
 
 	m, err := New(cfg)
@@ -20,11 +20,11 @@ func TestNew_DefaultValues(t *testing.T) {
 
 func TestNew_CustomValues(t *testing.T) {
 	cfg := Config{
-		Name:        "custom-wcc",
-		DisplayName: "Custom WCC Service",
-		Description: "Custom WCC Description",
+		Name:        "custom-remoteclaw",
+		DisplayName: "Custom RemoteClaw Service",
+		Description: "Custom RemoteClaw Description",
 		ConfigPath:  "/custom/config.yaml",
-		BinaryPath:  "/opt/wcc/bin/wcc",
+		BinaryPath:  "/opt/remoteclaw/bin/remoteclaw",
 	}
 
 	m, err := New(cfg)
@@ -35,7 +35,7 @@ func TestNew_CustomValues(t *testing.T) {
 
 func TestNew_UsesCurrentExecutable(t *testing.T) {
 	cfg := Config{
-		ConfigPath: "/etc/wcc/config.yaml",
+		ConfigPath: "/etc/remoteclaw/config.yaml",
 		// BinaryPath is empty, so should use current executable
 	}
 
@@ -48,7 +48,7 @@ func TestNew_UsesCurrentExecutable(t *testing.T) {
 
 func TestStatus_ReturnsString(t *testing.T) {
 	cfg := Config{
-		ConfigPath: "/etc/wcc/config.yaml",
+		ConfigPath: "/etc/remoteclaw/config.yaml",
 	}
 
 	m, err := New(cfg)

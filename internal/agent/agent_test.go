@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ecopelan/wcca/internal/ai"
-	"github.com/ecopelan/wcca/internal/config"
-	"github.com/ecopelan/wcca/internal/connect"
-	"github.com/ecopelan/wcca/internal/executor"
-	"github.com/ecopelan/wcca/internal/logging"
+	"github.com/ecopelan/remoteclaw/internal/ai"
+	"github.com/ecopelan/remoteclaw/internal/config"
+	"github.com/ecopelan/remoteclaw/internal/connect"
+	"github.com/ecopelan/remoteclaw/internal/executor"
+	"github.com/ecopelan/remoteclaw/internal/logging"
 )
 
 // MockConverser is a mock implementation of ai.Converser for testing

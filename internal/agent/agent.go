@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ecopelan/wcca/internal/ai"
-	"github.com/ecopelan/wcca/internal/config"
-	"github.com/ecopelan/wcca/internal/connect"
-	"github.com/ecopelan/wcca/internal/executor"
-	"github.com/ecopelan/wcca/internal/logging"
-	"github.com/ecopelan/wcca/internal/security"
+	"github.com/ecopelan/remoteclaw/internal/ai"
+	"github.com/ecopelan/remoteclaw/internal/config"
+	"github.com/ecopelan/remoteclaw/internal/connect"
+	"github.com/ecopelan/remoteclaw/internal/executor"
+	"github.com/ecopelan/remoteclaw/internal/logging"
+	"github.com/ecopelan/remoteclaw/internal/security"
 	"github.com/rs/zerolog"
 )
 
@@ -27,7 +27,7 @@ type contextKey string
 
 const spaceIDKey contextKey = "spaceID"
 
-// Agent is the main WCC orchestrator
+// Agent is the main RemoteClaw orchestrator
 type Agent struct {
 	cfg            *config.Config
 	mode           connect.Mode
@@ -141,7 +141,7 @@ func New(cfg *config.Config) (*Agent, error) {
 					challengeStore.SetPending(spaceID, cmd, reason)
 					return fmt.Sprintf(
 						"Command blocked: %s\n\nThis command requires confirmation. "+
-							"The user must reply with the exact challenge code to proceed. "+
+							"Reply with the decryption passphrase to proceed. "+
 							"The confirmation expires in 2 minutes.",
 						reason,
 					), nil

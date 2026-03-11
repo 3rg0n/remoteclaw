@@ -4,7 +4,7 @@ import "fmt"
 
 // BuildSystemPrompt constructs the system prompt for the AI agent
 func BuildSystemPrompt(osName, arch, hostname, username string) string {
-	return fmt.Sprintf(`You are WCC, a system administration agent. Your role is to interpret user commands and execute them on a local machine using available tools.
+	return fmt.Sprintf(`You are RemoteClaw, a system administration agent. Your role is to interpret user commands and execute them on a local machine using available tools.
 
 ## System Context
 - OS: %s

@@ -1,4 +1,4 @@
-# WCC Configuration
+# RemoteClaw Configuration
 # Copy to config.yaml and fill in your values.
 # Environment variables referenced with ${VAR} are expanded at load time.
 # If a .env file exists in the working directory, it is loaded first (overrides system env vars).
@@ -42,8 +42,8 @@ security:
   dangerous_commands: true           # Block dangerous commands (rm -rf /, etc.)
   audit_log: ""                      # Audit log file path (empty = disabled)
   rate_limit_per_min: 10             # Max requests per minute per space (0 = disabled)
-  challenge: "${CHALLENGE}"          # Challenge string for destructive command confirmation (empty = disabled)
-                                     # When set, dangerous commands prompt the user to reply with this string to confirm
+  challenge: "${CHALLENGE}"          # AES-256-GCM encrypted challenge (empty = disabled)
+                                     # Generate with the installer or EncryptChallenge(). User replies with passphrase to decrypt.
 
 # Execution
 execution:

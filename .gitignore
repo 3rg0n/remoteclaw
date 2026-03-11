@@ -1,6 +1,6 @@
 # Binaries
-wcca
-wcca.exe
+/remoteclaw
+/remoteclaw.exe
 *.exe
 *.dll
 *.so

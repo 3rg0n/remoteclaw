@@ -16,7 +16,7 @@ var (
 	Date    = "unknown"
 )
 
-// Config holds all WCC configuration settings
+// Config holds all RemoteClaw configuration settings
 type Config struct {
 	Mode      string            `mapstructure:"mode"`
 	Webex     WebexConfig       `mapstructure:"webex"`

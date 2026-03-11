@@ -34,7 +34,7 @@ execution:
 logging:
   level: "debug"
   format: "text"
-  file: "/var/log/wcc.log"
+  file: "/var/log/remoteclaw.log"
 health:
   enabled: false
   addr: "0.0.0.0:8080"
@@ -64,7 +64,7 @@ health:
 
 	assert.Equal(t, "debug", cfg.Logging.Level)
 	assert.Equal(t, "text", cfg.Logging.Format)
-	assert.Equal(t, "/var/log/wcc.log", cfg.Logging.File)
+	assert.Equal(t, "/var/log/remoteclaw.log", cfg.Logging.File)
 
 	assert.False(t, cfg.Health.Enabled)
 	assert.Equal(t, "0.0.0.0:8080", cfg.Health.Addr)

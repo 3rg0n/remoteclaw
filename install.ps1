@@ -1,14 +1,14 @@
-# WCCA Installer — Windows
-# Usage: irm https://raw.githubusercontent.com/ecopelan/wcca/main/install.ps1 | iex
+# RemoteClaw Installer — Windows
+# Usage: irm https://raw.githubusercontent.com/ecopelan/remoteclaw/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
-$Repo        = "ecopelan/wcca"
+$Repo        = "ecopelan/remoteclaw"
 $ReleaseUrl  = "https://github.com/$Repo/releases/latest/download"
 $OllamaModel = "phi4-mini"
 
-$InstallDir  = "C:\ProgramData\wcca"
-$BinPath     = "$InstallDir\wcca.exe"
+$InstallDir  = "C:\ProgramData\remoteclaw"
+$BinPath     = "$InstallDir\remoteclaw.exe"
 $ConfigPath  = "$InstallDir\config.yaml"
 $EnvPath     = "$InstallDir\.env"
 $LogDir      = "$InstallDir\logs"
@@ -52,7 +52,7 @@ function Test-ExistingInstall {
     if (Test-Path $BinPath) {
         $ver = & $BinPath version 2>$null
         if (-not $ver) { $ver = "unknown" }
-        Write-Warn "WCCA is already installed at $BinPath ($ver)"
+        Write-Warn "RemoteClaw is already installed at $BinPath ($ver)"
         $answer = Read-Host "  Upgrade to latest? [Y/n]"
         if ($answer -match '^[nN]') {
             Write-Info "Aborted."
@@ -66,7 +66,7 @@ function Test-ExistingInstall {
 
 function Install-Binary {
     $arch  = Get-Arch
-    $asset = "wcca-windows-${arch}.exe"
+    $asset = "remoteclaw-windows-${arch}.exe"
     $url   = "$ReleaseUrl/$asset"
 
     Write-Info "Downloading $asset from GitHub Releases…"
@@ -75,7 +75,7 @@ function Install-Binary {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     }
 
-    $tmpFile = Join-Path $env:TEMP "wcca-download.exe"
+    $tmpFile = Join-Path $env:TEMP "remoteclaw-download.exe"
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $url -OutFile $tmpFile -UseBasicParsing
@@ -88,7 +88,7 @@ function Install-Binary {
     Copy-Item $tmpFile $BinPath -Force
     Remove-Item $tmpFile -Force -ErrorAction SilentlyContinue
 
-    Write-Ok "Installed wcca → $BinPath"
+    Write-Ok "Installed remoteclaw → $BinPath"
 }
 
 # --- Add to PATH -----------------------------------------------------------
@@ -219,7 +219,7 @@ function Pull-OllamaModel {
 
 function Get-UserConfig {
     Write-Host ""
-    Write-Host "=== WCCA Configuration ===" -ForegroundColor White
+    Write-Host "=== RemoteClaw Configuration ===" -ForegroundColor White
 
     # Bot token (required)
     while ($true) {
@@ -228,8 +228,26 @@ function Get-UserConfig {
         Write-Err "Bot token is required. Get one at https://developer.webex.com/my-apps"
     }
 
-    # Challenge (optional)
-    $script:Challenge = Read-Host "  Challenge string for destructive-command confirmation (optional)"
+    # Challenge passphrase (optional)
+    $passphrase = Read-Host "  Challenge passphrase for destructive-command confirmation (optional)"
+    $script:ChallengeEncrypted = ""
+
+    if ($passphrase) {
+        Write-Info "Encrypting challenge with AES-256-GCM…"
+        try {
+            $script:ChallengeEncrypted = & $BinPath encrypt-challenge $passphrase 2>$null
+            if ($script:ChallengeEncrypted) {
+                Write-Ok "Challenge encrypted."
+            }
+            else {
+                throw "empty output"
+            }
+        }
+        catch {
+            Write-Warn "Binary encrypt not available. Storing passphrase — encrypt manually before production use."
+            $script:ChallengeEncrypted = $passphrase
+        }
+    }
 
     # Allowed emails (optional)
     $script:AllowedEmails = Read-Host "  Allowed emails, comma-separated (optional)"
@@ -251,8 +269,8 @@ function New-EnvFile {
     Write-Info "Generating $EnvPath…"
 
     $lines = @("WEBEX_BOT_TOKEN=$($script:BotToken)")
-    if ($script:Challenge) {
-        $lines += "CHALLENGE=$($script:Challenge)"
+    if ($script:ChallengeEncrypted) {
+        $lines += "CHALLENGE=$($script:ChallengeEncrypted)"
     }
 
     $lines -join "`r`n" | Set-Content -Path $EnvPath -Encoding UTF8 -Force
@@ -276,6 +294,12 @@ function New-EnvFile {
     Set-Acl $EnvPath $acl
 
     Write-Ok "Created $EnvPath (restricted ACL)"
+
+    # Also set CHALLENGE as a system environment variable for persistence
+    if ($script:ChallengeEncrypted) {
+        [Environment]::SetEnvironmentVariable("CHALLENGE", $script:ChallengeEncrypted, "Machine")
+        Write-Info "Set CHALLENGE as system environment variable."
+    }
 }
 
 # --- Generate config.yaml --------------------------------------------------
@@ -295,7 +319,7 @@ function New-ConfigFile {
         $emailsYaml = "`n    # - `"admin@company.com`""
     }
 
-    $challengeLine = if ($script:Challenge) {
+    $challengeLine = if ($script:ChallengeEncrypted) {
         '  challenge: "${CHALLENGE}"'
     }
     else {
@@ -343,15 +367,15 @@ health:
 
 # --- Install service -------------------------------------------------------
 
-function Install-WccaService {
-    Write-Info "Installing WCCA as a system service…"
+function Install-RemoteClawService {
+    Write-Info "Installing RemoteClaw as a system service…"
     try {
         & $BinPath install --config $ConfigPath
         Write-Ok "Service installed."
         return $true
     }
     catch {
-        Write-Warn "Service installation failed. You can run 'wcca install --config $ConfigPath' manually."
+        Write-Warn "Service installation failed. You can run 'remoteclaw install --config $ConfigPath' manually."
         return $false
     }
 }
@@ -362,10 +386,10 @@ function Test-ServiceStatus {
     Write-Info "Checking service status…"
     try {
         & $BinPath status
-        Write-Ok "WCCA service is running."
+        Write-Ok "RemoteClaw service is running."
     }
     catch {
-        Write-Warn "Service may not be running yet. Check with: wcca status"
+        Write-Warn "Service may not be running yet. Check with: remoteclaw status"
     }
 }
 
@@ -384,9 +408,9 @@ function Write-Summary {
     Write-Host '    "What'"'"'s the disk usage?"'
     Write-Host ""
     Write-Host "  Useful commands:"
-    Write-Host "    wcca status                                  Show service status"
-    Write-Host "    wcca uninstall                               Remove the service"
-    Write-Host '    Remove-Item "C:\ProgramData\wcca" -Recurse   Remove all files'
+    Write-Host "    remoteclaw status                                       Show service status"
+    Write-Host "    remoteclaw uninstall                                    Remove the service"
+    Write-Host '    Remove-Item "C:\ProgramData\remoteclaw" -Recurse        Remove all files'
     Write-Host ""
 }
 
@@ -394,7 +418,7 @@ function Write-Summary {
 
 function Main {
     Write-Host ""
-    Write-Host "WCCA Installer — Webex Command & Control Agent" -ForegroundColor White
+    Write-Host "RemoteClaw Installer — AI-powered remote system control via Webex" -ForegroundColor White
     Write-Host ""
 
     Assert-Admin
@@ -415,7 +439,7 @@ function Main {
     Get-UserConfig
     New-EnvFile
     New-ConfigFile
-    Install-WccaService | Out-Null
+    Install-RemoteClawService | Out-Null
     Test-ServiceStatus
     Write-Summary
 }

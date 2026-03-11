@@ -3,7 +3,7 @@ package agent
 import (
 	"sync"
 
-	"github.com/ecopelan/wcca/internal/ai"
+	"github.com/ecopelan/remoteclaw/internal/ai"
 )
 
 // ConversationManager manages per-user/space conversation history

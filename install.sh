@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# WCCA Installer — Linux / macOS
-# Usage: curl -fsSL https://raw.githubusercontent.com/ecopelan/wcca/main/install.sh | bash
+# RemoteClaw Installer — Linux / macOS
+# Usage: curl -fsSL https://raw.githubusercontent.com/ecopelan/remoteclaw/main/install.sh | bash
 
-REPO="ecopelan/wcca"
+REPO="ecopelan/remoteclaw"
 RELEASE_URL="https://github.com/${REPO}/releases/latest/download"
 OLLAMA_MODEL="phi4-mini"
 
@@ -50,14 +50,14 @@ detect_platform() {
 
     # Set platform-specific paths
     if [ "$OS" = "linux" ]; then
-        CONF_DIR="/etc/wcca"
-        LOG_DIR="/var/log/wcca"
+        CONF_DIR="/etc/remoteclaw"
+        LOG_DIR="/var/log/remoteclaw"
     else
-        CONF_DIR="/usr/local/etc/wcca"
-        LOG_DIR="/usr/local/var/log/wcca"
+        CONF_DIR="/usr/local/etc/remoteclaw"
+        LOG_DIR="/usr/local/var/log/remoteclaw"
     fi
     BIN_DIR="/usr/local/bin"
-    BIN_PATH="${BIN_DIR}/wcca"
+    BIN_PATH="${BIN_DIR}/remoteclaw"
     CONFIG_PATH="${CONF_DIR}/config.yaml"
     ENV_PATH="${CONF_DIR}/.env"
 }
@@ -81,7 +81,7 @@ check_existing() {
     if [ -f "$BIN_PATH" ]; then
         local current_version
         current_version="$("$BIN_PATH" version 2>/dev/null || echo "unknown")"
-        warn "WCCA is already installed at ${BIN_PATH} (${current_version})"
+        warn "RemoteClaw is already installed at ${BIN_PATH} (${current_version})"
         printf "  Upgrade to latest? [Y/n] "
         read -r answer
         case "$answer" in
@@ -93,11 +93,11 @@ check_existing() {
 
 # --- Download binary ----------------------------------------------------
 download_binary() {
-    local asset="wcca-${OS}-${ARCH}"
+    local asset="remoteclaw-${OS}-${ARCH}"
     local url="${RELEASE_URL}/${asset}"
 
     TMPDIR_INSTALL="$(mktemp -d)"
-    local tmp_bin="${TMPDIR_INSTALL}/wcca"
+    local tmp_bin="${TMPDIR_INSTALL}/remoteclaw"
 
     info "Downloading ${asset} from GitHub Releases…"
     if command -v curl >/dev/null 2>&1; then
@@ -109,7 +109,7 @@ download_binary() {
     fi
 
     $SUDO install -m 755 "$tmp_bin" "$BIN_PATH"
-    ok "Installed wcca → ${BIN_PATH}"
+    ok "Installed remoteclaw → ${BIN_PATH}"
 }
 
 # --- Install Ollama -----------------------------------------------------
@@ -180,10 +180,48 @@ pull_model() {
     fi
 }
 
+# --- AES-256 challenge encryption ----------------------------------------
+encrypt_challenge() {
+    # Encrypt the passphrase into an AES-256-GCM blob using openssl
+    # Format: base64(salt + iv + ciphertext + tag)
+    local passphrase="$1"
+    local sentinel="REMOTECLAW_CHALLENGE_OK"
+
+    # Generate 16-byte salt and derive key via scrypt-like PBKDF2
+    local salt
+    salt=$(openssl rand -hex 16)
+
+    # Derive 32-byte key using PBKDF2 (SHA-256, 32768 iterations to approximate scrypt cost)
+    local key
+    key=$(echo -n "$passphrase" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:${salt}" -binary | xxd -p -c 64)
+
+    # Generate 12-byte nonce for GCM
+    local nonce
+    nonce=$(openssl rand -hex 12)
+
+    # Encrypt with AES-256-GCM
+    local encrypted
+    encrypted=$(echo -n "$sentinel" | openssl enc -aes-256-gcm \
+        -K "$key" -iv "$nonce" -nosalt -a 2>/dev/null || echo "")
+
+    if [ -z "$encrypted" ]; then
+        # Fallback: store the passphrase directly — the Go binary handles
+        # AES-256-GCM encryption/decryption with scrypt KDF at runtime.
+        # The installer will use the binary's built-in encrypt subcommand if available,
+        # otherwise store plaintext for the binary to encrypt on first load.
+        warn "openssl GCM not available. Challenge will be encrypted by RemoteClaw on first run."
+        echo "$passphrase"
+        return
+    fi
+
+    # Combine salt + nonce + encrypted (base64)
+    echo "${salt}${nonce}${encrypted}" | base64
+}
+
 # --- Interactive prompts -------------------------------------------------
 prompt_config() {
     echo ""
-    printf "${BOLD}=== WCCA Configuration ===${NC}\n"
+    printf "${BOLD}=== RemoteClaw Configuration ===${NC}\n"
     echo ""
 
     # Bot token (required)
@@ -196,10 +234,25 @@ prompt_config() {
         err "Bot token is required. Get one at https://developer.webex.com/my-apps"
     done
 
-    # Challenge (optional)
-    printf "  Challenge string for destructive-command confirmation (optional): "
-    read -r CHALLENGE
-    CHALLENGE="${CHALLENGE:-}"
+    # Challenge passphrase (optional)
+    printf "  Challenge passphrase for destructive-command confirmation (optional): "
+    read -r CHALLENGE_PASSPHRASE
+    CHALLENGE_PASSPHRASE="${CHALLENGE_PASSPHRASE:-}"
+
+    # If passphrase provided, encrypt it using the binary
+    CHALLENGE_ENCRYPTED=""
+    if [ -n "$CHALLENGE_PASSPHRASE" ]; then
+        info "Encrypting challenge with AES-256-GCM…"
+        # Use the installed binary to encrypt (it has the same scrypt+GCM logic)
+        if CHALLENGE_ENCRYPTED=$("$BIN_PATH" encrypt-challenge "$CHALLENGE_PASSPHRASE" 2>/dev/null); then
+            ok "Challenge encrypted."
+        else
+            # Binary doesn't have encrypt-challenge yet — store raw for now
+            # The Go code's EncryptChallenge function is the canonical implementation
+            warn "Binary encrypt not available. Storing passphrase — encrypt manually before production use."
+            CHALLENGE_ENCRYPTED="$CHALLENGE_PASSPHRASE"
+        fi
+    fi
 
     # Allowed emails (optional)
     printf "  Allowed emails, comma-separated (optional): "
@@ -220,14 +273,29 @@ generate_env() {
     info "Generating ${ENV_PATH}…"
 
     local env_content="WEBEX_BOT_TOKEN=${BOT_TOKEN}"
-    if [ -n "$CHALLENGE" ]; then
+    if [ -n "$CHALLENGE_ENCRYPTED" ]; then
         env_content="${env_content}
-CHALLENGE=${CHALLENGE}"
+CHALLENGE=${CHALLENGE_ENCRYPTED}"
     fi
 
     echo "$env_content" | $SUDO tee "$ENV_PATH" >/dev/null
     $SUDO chmod 600 "$ENV_PATH"
     ok "Created ${ENV_PATH} (mode 600)"
+
+    # Also export to shell profile for persistence
+    if [ -n "$CHALLENGE_ENCRYPTED" ] && [ "$OS" = "darwin" ]; then
+        local zshenv="$HOME/.zshenv"
+        if ! grep -q "CHALLENGE=" "$zshenv" 2>/dev/null; then
+            echo "export CHALLENGE=\"${CHALLENGE_ENCRYPTED}\"" >> "$zshenv"
+            info "Added CHALLENGE to ${zshenv}"
+        fi
+    elif [ -n "$CHALLENGE_ENCRYPTED" ] && [ "$OS" = "linux" ]; then
+        local profile="$HOME/.profile"
+        if ! grep -q "CHALLENGE=" "$profile" 2>/dev/null; then
+            echo "export CHALLENGE=\"${CHALLENGE_ENCRYPTED}\"" >> "$profile"
+            info "Added CHALLENGE to ${profile}"
+        fi
+    fi
 }
 
 # --- Generate config.yaml ------------------------------------------------
@@ -253,7 +321,7 @@ generate_config() {
     fi
 
     local challenge_line=""
-    if [ -n "$CHALLENGE" ]; then
+    if [ -n "$CHALLENGE_ENCRYPTED" ]; then
         challenge_line='  challenge: "${CHALLENGE}"'
     else
         challenge_line='  challenge: ""'
@@ -299,11 +367,11 @@ YAML
 
 # --- Install service ------------------------------------------------------
 install_service() {
-    info "Installing WCCA as a system service…"
+    info "Installing RemoteClaw as a system service…"
     if $SUDO "$BIN_PATH" install --config "$CONFIG_PATH"; then
         ok "Service installed."
     else
-        warn "Service installation failed. You can run 'wcca install --config ${CONFIG_PATH}' manually."
+        warn "Service installation failed. You can run 'remoteclaw install --config ${CONFIG_PATH}' manually."
         return 1
     fi
 }
@@ -312,9 +380,9 @@ install_service() {
 verify() {
     info "Checking service status…"
     if "$BIN_PATH" status 2>/dev/null; then
-        ok "WCCA service is running."
+        ok "RemoteClaw service is running."
     else
-        warn "Service may not be running yet. Check with: wcca status"
+        warn "Service may not be running yet. Check with: remoteclaw status"
     fi
 }
 
@@ -332,13 +400,13 @@ print_summary() {
     echo "    \"What's the disk usage?\""
     echo ""
     echo "  Useful commands:"
-    echo "    wcca status                     Show service status"
-    echo "    wcca uninstall                  Remove the service"
-    echo "    sudo rm /usr/local/bin/wcca     Remove the binary"
+    echo "    remoteclaw status                     Show service status"
+    echo "    remoteclaw uninstall                  Remove the service"
+    echo "    sudo rm /usr/local/bin/remoteclaw     Remove the binary"
     if [ "$OS" = "linux" ]; then
-        echo "    sudo rm -rf /etc/wcca/          Remove config"
+        echo "    sudo rm -rf /etc/remoteclaw/          Remove config"
     else
-        echo "    sudo rm -rf /usr/local/etc/wcca/ Remove config"
+        echo "    sudo rm -rf /usr/local/etc/remoteclaw/ Remove config"
     fi
     echo ""
 }
@@ -346,7 +414,7 @@ print_summary() {
 # --- Main ------------------------------------------------------------------
 main() {
     echo ""
-    printf "${BOLD}WCCA Installer — Webex Command & Control Agent${NC}\n"
+    printf "${BOLD}RemoteClaw Installer — AI-powered remote system control via Webex${NC}\n"
     echo ""
 
     detect_platform

@@ -34,7 +34,7 @@ type AuditEntry struct {
 // AuditLogger writes structured NDJSON audit entries with daily rotation and 30-day retention.
 // Files are named <base>-YYYY-MM-DD.jsonl (e.g., audit-2026-02-18.jsonl).
 type AuditLogger struct {
-	basePath string // e.g., "/var/log/wcc/audit" → files are audit-2026-02-18.jsonl
+	basePath string // e.g., "/var/log/remoteclaw/audit" → files are audit-2026-02-18.jsonl
 	dir      string
 	prefix   string
 	logger   zerolog.Logger
@@ -44,7 +44,7 @@ type AuditLogger struct {
 }
 
 // NewAuditLogger creates an audit logger that writes NDJSON to date-stamped files.
-// basePath is the path without extension (e.g., "audit" or "/var/log/wcc/audit").
+// basePath is the path without extension (e.g., "audit" or "/var/log/remoteclaw/audit").
 // Files are created as <basePath>-YYYY-MM-DD.jsonl.
 // If basePath is empty, returns nil (audit logging disabled).
 func NewAuditLogger(basePath string) (*AuditLogger, error) {

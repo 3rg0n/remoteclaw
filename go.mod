@@ -1,4 +1,4 @@
-module github.com/ecopelan/wcca
+module github.com/ecopelan/remoteclaw
 
 go 1.26.0
 
