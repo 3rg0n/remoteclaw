@@ -42,8 +42,7 @@ security:
   dangerous_commands: true           # Block dangerous commands (rm -rf /, etc.)
   audit_log: ""                      # Audit log file path (empty = disabled)
   rate_limit_per_min: 10             # Max requests per minute per space (0 = disabled)
-  challenge: "${CHALLENGE}"          # AES-256-GCM encrypted challenge (empty = disabled)
-                                     # Generate with the installer or EncryptChallenge(). User replies with passphrase to decrypt.
+  challenge: "${CHALLENGE}"          # Challenge token for destructive command confirmation (empty = disabled)
 
 # Execution
 execution:

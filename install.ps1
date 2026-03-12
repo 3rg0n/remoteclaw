@@ -228,23 +228,23 @@ function Get-UserConfig {
         Write-Err "Bot token is required. Get one at https://developer.webex.com/my-apps"
     }
 
-    # Challenge passphrase (optional)
-    $passphrase = Read-Host "  Challenge passphrase for destructive-command confirmation (optional)"
+    # Challenge secret (optional)
+    $passphrase = Read-Host "  Challenge secret for destructive-command confirmation (optional)"
     $script:ChallengeEncrypted = ""
 
     if ($passphrase) {
-        Write-Info "Encrypting challenge with AES-256-GCM…"
+        Write-Info "Setting up challenge…"
         try {
             $script:ChallengeEncrypted = & $BinPath encrypt-challenge $passphrase 2>$null
             if ($script:ChallengeEncrypted) {
-                Write-Ok "Challenge encrypted."
+                Write-Ok "Challenge configured."
             }
             else {
                 throw "empty output"
             }
         }
         catch {
-            Write-Warn "Binary encrypt not available. Storing passphrase — encrypt manually before production use."
+            Write-Warn "Binary encrypt not available. Storing challenge — configure before production use."
             $script:ChallengeEncrypted = $passphrase
         }
     }

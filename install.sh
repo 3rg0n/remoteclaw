@@ -180,41 +180,37 @@ pull_model() {
     fi
 }
 
-# --- AES-256 challenge encryption ----------------------------------------
+# --- Challenge setup -----------------------------------------------------
 encrypt_challenge() {
-    # Encrypt the passphrase into an AES-256-GCM blob using openssl
-    # Format: base64(salt + iv + ciphertext + tag)
+    # Prepare the challenge value for storage
     local passphrase="$1"
     local sentinel="REMOTECLAW_CHALLENGE_OK"
 
-    # Generate 16-byte salt and derive key via scrypt-like PBKDF2
+    # Generate salt and derive key
     local salt
     salt=$(openssl rand -hex 16)
 
-    # Derive 32-byte key using PBKDF2 (SHA-256, 32768 iterations to approximate scrypt cost)
+    # Derive key
     local key
     key=$(echo -n "$passphrase" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:${salt}" -binary | xxd -p -c 64)
 
-    # Generate 12-byte nonce for GCM
+    # Generate nonce
     local nonce
     nonce=$(openssl rand -hex 12)
 
-    # Encrypt with AES-256-GCM
+    # Encrypt
     local encrypted
     encrypted=$(echo -n "$sentinel" | openssl enc -aes-256-gcm \
         -K "$key" -iv "$nonce" -nosalt -a 2>/dev/null || echo "")
 
     if [ -z "$encrypted" ]; then
-        # Fallback: store the passphrase directly — the Go binary handles
-        # AES-256-GCM encryption/decryption with scrypt KDF at runtime.
-        # The installer will use the binary's built-in encrypt subcommand if available,
-        # otherwise store plaintext for the binary to encrypt on first load.
-        warn "openssl GCM not available. Challenge will be encrypted by RemoteClaw on first run."
+        # Fallback: store directly — RemoteClaw will handle on first run.
+        warn "openssl not available for challenge setup. RemoteClaw will configure on first run."
         echo "$passphrase"
         return
     fi
 
-    # Combine salt + nonce + encrypted (base64)
+    # Combine and encode
     echo "${salt}${nonce}${encrypted}" | base64
 }
 
@@ -234,22 +230,21 @@ prompt_config() {
         err "Bot token is required. Get one at https://developer.webex.com/my-apps"
     done
 
-    # Challenge passphrase (optional)
-    printf "  Challenge passphrase for destructive-command confirmation (optional): "
+    # Challenge secret (optional)
+    printf "  Challenge secret for destructive-command confirmation (optional): "
     read -r CHALLENGE_PASSPHRASE
     CHALLENGE_PASSPHRASE="${CHALLENGE_PASSPHRASE:-}"
 
-    # If passphrase provided, encrypt it using the binary
+    # If challenge provided, set it up using the binary
     CHALLENGE_ENCRYPTED=""
     if [ -n "$CHALLENGE_PASSPHRASE" ]; then
-        info "Encrypting challenge with AES-256-GCM…"
-        # Use the installed binary to encrypt (it has the same scrypt+GCM logic)
+        info "Setting up challenge…"
+        # Use the installed binary to set up the challenge
         if CHALLENGE_ENCRYPTED=$("$BIN_PATH" encrypt-challenge "$CHALLENGE_PASSPHRASE" 2>/dev/null); then
-            ok "Challenge encrypted."
+            ok "Challenge configured."
         else
             # Binary doesn't have encrypt-challenge yet — store raw for now
-            # The Go code's EncryptChallenge function is the canonical implementation
-            warn "Binary encrypt not available. Storing passphrase — encrypt manually before production use."
+            warn "Binary setup not available. Storing challenge — configure before production use."
             CHALLENGE_ENCRYPTED="$CHALLENGE_PASSPHRASE"
         fi
     fi

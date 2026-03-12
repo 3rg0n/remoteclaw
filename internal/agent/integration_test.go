@@ -327,7 +327,7 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 	callCount := 0
 	mode := &CapturingMode{}
 
-	// Create agent with AES-256 encrypted challenge
+	// Create agent with encrypted challenge
 	encrypted, err := security.EncryptChallenge("confirm-it")
 	require.NoError(t, err)
 	agent := newTestAgent(t, nil, func(a *Agent) {
@@ -351,7 +351,7 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 				},
 				{
 					Role:    "assistant",
-					Content: []ai.ContentBlock{{Type: "text", Text: "The command requires confirmation. Please reply with the decryption passphrase to proceed."}},
+					Content: []ai.ContentBlock{{Type: "text", Text: "The command requires confirmation. Please reply with the challenge response to proceed."}},
 				},
 			},
 			callCount: &callCount,
@@ -375,7 +375,7 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 						agent.challengeStore.SetPending(spaceID, cmd, result.Error)
 					}
 				}
-				return "Command blocked. User must reply with decryption passphrase to confirm.", nil
+				return "Command blocked. User must reply with the challenge response to confirm.", nil
 			}
 			output := result.Output
 			if result.Error != "" {

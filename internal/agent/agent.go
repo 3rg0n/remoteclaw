@@ -141,7 +141,7 @@ func New(cfg *config.Config) (*Agent, error) {
 					challengeStore.SetPending(spaceID, cmd, reason)
 					return fmt.Sprintf(
 						"Command blocked: %s\n\nThis command requires confirmation. "+
-							"Reply with the decryption passphrase to proceed. "+
+							"Reply with the challenge response to proceed. "+
 							"The confirmation expires in 2 minutes.",
 						reason,
 					), nil
