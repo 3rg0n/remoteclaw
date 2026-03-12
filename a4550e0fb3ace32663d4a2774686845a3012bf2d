@@ -1,0 +1,29 @@
+install.sh
+  0dcea96d7357c198 183,185,207-208,213,233,238,242,247
+config/config.example.yaml
+  0dcea96d7357c198 45
+install.ps1
+  0dcea96d7357c198 231
+internal/agent/integration_test.go
+  0dcea96d7357c198 330
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "a4550e0fb3ace32663d4a2774686845a3012bf2d",
+  "prompts": {
+    "0dcea96d7357c198": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9c467305-fba0-414d-9d4a-276b1fca0a09",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <62959009+3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 16,
+      "total_deletions": 22,
+      "accepted_lines": 12,
+      "overriden_lines": 0
+    }
+  }
+}
