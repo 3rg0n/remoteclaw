@@ -1,0 +1,77 @@
+internal/security/dangerous.go
+  daa6702bfadeb202 27-31,35,37-40,60-62
+internal/connect/format.go
+  daa6702bfadeb202 3-4,10-11,14-16
+internal/ai/ollama.go
+  daa6702bfadeb202 9,24-26
+internal/executor/filesystem.go
+  daa6702bfadeb202 6,9,33,35-36,40,42-50,53-54,63-106,110,122-127
+internal/security/dangerous_test.go
+  daa6702bfadeb202 37-42
+config/config.example.yaml
+  daa6702bfadeb202 32
+internal/security/ratelimit.go
+  daa6702bfadeb202 14,29,66-74,80-84,96
+internal/agent/agent.go
+  daa6702bfadeb202 16-21,45,99,205-207,242-244,258-265,316
+README.md
+  daa6702bfadeb202 102,108,201
+internal/executor/command.go
+  daa6702bfadeb202 7,13,41,45-53,56,65-85,90-96,103,119-120
+install.sh
+  daa6702bfadeb202 5,7
+go.mod
+  daa6702bfadeb202 1
+internal/security/challenge.go
+  daa6702bfadeb202 48,57,121-130,136-140,145,147
+Makefile
+  daa6702bfadeb202 2
+internal/agent/integration_test.go
+  daa6702bfadeb202 13-18,322
+internal/agent/conversation.go
+  daa6702bfadeb202 6,9-10,69-71,91-108
+internal/config/config.go
+  daa6702bfadeb202 90-91,201
+internal/executor/executor_test.go
+  daa6702bfadeb202 209-237
+cmd/remoteclaw/main.go
+  daa6702bfadeb202 8-11
+internal/connect/wmcp.go
+  daa6702bfadeb202 7,42-47
+internal/ai/bedrock.go
+  daa6702bfadeb202 51,56
+internal/config/config_test.go
+  daa6702bfadeb202 593
+.github/workflows/release.yml
+  daa6702bfadeb202 1-82
+internal/agent/health.go
+  daa6702bfadeb202 56,65-69,71,73
+internal/executor/executor.go
+  daa6702bfadeb202 8,64,66-68
+internal/agent/agent_test.go
+  daa6702bfadeb202 14-18,194-196,198-199
+install.ps1
+  daa6702bfadeb202 2,6
+internal/agent/conversation_test.go
+  daa6702bfadeb202 7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "259421fc468ece6e97b2c6521124f4be8c5c3ee9",
+  "prompts": {
+    "daa6702bfadeb202": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd5edaf2-003c-422c-b789-5219f1ec6c94",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>",
+      "messages": [],
+      "total_additions": 417,
+      "total_deletions": 101,
+      "accepted_lines": 400,
+      "overriden_lines": 0
+    }
+  }
+}
