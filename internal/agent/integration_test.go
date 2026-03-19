@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ecopelan/remoteclaw/internal/ai"
-	"github.com/ecopelan/remoteclaw/internal/config"
-	"github.com/ecopelan/remoteclaw/internal/connect"
-	"github.com/ecopelan/remoteclaw/internal/executor"
-	"github.com/ecopelan/remoteclaw/internal/logging"
-	"github.com/ecopelan/remoteclaw/internal/security"
+	"github.com/3rg0n/remoteclaw/internal/ai"
+	"github.com/3rg0n/remoteclaw/internal/config"
+	"github.com/3rg0n/remoteclaw/internal/connect"
+	"github.com/3rg0n/remoteclaw/internal/executor"
+	"github.com/3rg0n/remoteclaw/internal/logging"
+	"github.com/3rg0n/remoteclaw/internal/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -319,7 +319,7 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 
 	sent := mode.getSentMessages()
 	require.Len(t, sent, 1)
-	assert.Contains(t, sent[0].Text, "Error processing request")
+	assert.Contains(t, sent[0].Text, "internal error occurred")
 }
 
 // TestIntegration_ChallengeResponse tests the challenge-response flow for destructive commands

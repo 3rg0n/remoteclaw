@@ -29,7 +29,7 @@ ai:
   # "auto" uses Bedrock if AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY are set, otherwise local
   provider: "auto"
   # Model name — for local: "phi4-mini" (default, 3.8B) or "phi4" (14B)
-  #             for bedrock: "us.anthropic.claude-sonnet-4-20250514-v1:0"
+  #             for bedrock: "global.anthropic.claude-sonnet-4-6"
   model: "phi4-mini"
   temperature: 0.2
   max_tokens: 4096

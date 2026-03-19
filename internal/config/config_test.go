@@ -590,7 +590,7 @@ func TestValidateBedrockOverridesLocalModel(t *testing.T) {
 
 	err := cfg.Validate()
 	require.NoError(t, err)
-	assert.Equal(t, "us.anthropic.claude-sonnet-4-20250514-v1:0", cfg.AI.Model)
+	assert.Equal(t, "global.anthropic.claude-sonnet-4-6", cfg.AI.Model)
 }
 
 func TestValidateBedrockKeepsExplicitModel(t *testing.T) {

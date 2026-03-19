@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ecopelan/remoteclaw/internal/ai"
+	"github.com/3rg0n/remoteclaw/internal/ai"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

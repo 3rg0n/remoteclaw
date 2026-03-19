@@ -24,13 +24,20 @@ func NewDangerousChecker() *DangerousChecker {
 		pattern string
 		reason  string
 	}{
-		// Destructive filesystem operations
-		{`rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?(-[a-zA-Z]*r[a-zA-Z]*\s+)?/(\s|$)`, "recursive deletion of root filesystem"},
-		{`rm\s+(-[a-zA-Z]*r[a-zA-Z]*\s+)?(-[a-zA-Z]*f[a-zA-Z]*\s+)?/(\s|$)`, "recursive deletion of root filesystem"},
+		// Destructive filesystem operations — match flags in any order/combination
+		{`rm\s+(-\w*r\w*\s+)*(-\w*f\w*\s+)*/(\s|$)`, "recursive deletion of root filesystem"},
+		{`rm\s+(-\w*f\w*\s+)*(-\w*r\w*\s+)*/(\s|$)`, "recursive deletion of root filesystem"},
+		{`rm\s+-r\s+-f\s+/(\s|$)`, "recursive deletion of root filesystem"},
+		{`rm\s+-f\s+-r\s+/(\s|$)`, "recursive deletion of root filesystem"},
 		{`del\s+/s\s+/q\s+[A-Za-z]:\\`, "recursive deletion of drive root"},
 		{`format\s+[A-Za-z]:`, "formatting a drive"},
 		{`mkfs\.`, "creating a filesystem (destructive)"},
-		{`dd\s+if=.*\s+of=/dev/`, "raw disk write via dd"},
+		{`dd\s+.*of=/dev/`, "raw disk write via dd"},
+
+		// Additional destructive tools
+		{`\bshred\b`, "secure file destruction via shred"},
+		{`\bwipefs\b`, "wiping filesystem signatures"},
+		{`\btruncate\b.*--size\s+0`, "truncating file to zero bytes"},
 
 		// Fork bomb
 		{`:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;?\s*:`, "fork bomb"},
@@ -49,6 +56,10 @@ func NewDangerousChecker() *DangerousChecker {
 		{`\bsudo\b`, "privilege escalation via sudo"},
 		{`\brunas\b`, "privilege escalation via runas"},
 		{`\bsu\s+-`, "privilege escalation via su"},
+
+		// Shell evaluation/indirection (bypass attempts)
+		{`\beval\b`, "shell eval (potential bypass)"},
+		{`\bexec\b`, "shell exec (potential bypass)"},
 
 		// Network exfiltration patterns (piping remote content to shell)
 		{`curl\s+.*\|\s*(ba)?sh`, "piping remote content to shell"},

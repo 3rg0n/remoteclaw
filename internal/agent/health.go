@@ -53,6 +53,7 @@ func (a *Agent) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 	a.mu.RLock()
 	lastMsg := a.lastMsg
+	isConnected := a.connected
 	a.mu.RUnlock()
 
 	uptime := time.Since(a.startTime)
@@ -61,10 +62,15 @@ func (a *Agent) healthHandler(w http.ResponseWriter, r *http.Request) {
 		lastMsgStr = lastMsg.Format(time.RFC3339)
 	}
 
+	status := "healthy"
+	if !isConnected {
+		status = "disconnected"
+	}
+
 	resp := healthResponse{
-		Status:    "healthy",
+		Status:    status,
 		Uptime:    uptime.String(),
-		Connected: true,
+		Connected: isConnected,
 		LastMsg:   lastMsgStr,
 	}
 

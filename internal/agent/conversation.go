@@ -3,8 +3,10 @@ package agent
 import (
 	"sync"
 
-	"github.com/ecopelan/remoteclaw/internal/ai"
+	"github.com/3rg0n/remoteclaw/internal/ai"
 )
+
+const maxHistoryBytes = 512 * 1024 // 512KB total content size cap per conversation
 
 // ConversationManager manages per-user/space conversation history
 type ConversationManager struct {
@@ -64,6 +66,9 @@ func (cm *ConversationManager) UpdateHistory(key string, history []ai.Message) {
 		historyCopy = historyCopy[len(historyCopy)-cm.maxLen:]
 	}
 
+	// Trim by total content size to prevent unbounded memory from large tool results
+	historyCopy = trimHistoryBySize(historyCopy, maxHistoryBytes)
+
 	cm.histories[key] = historyCopy
 }
 
@@ -81,6 +86,24 @@ func (cm *ConversationManager) ClearAll() {
 	defer cm.mu.Unlock()
 
 	cm.histories = make(map[string][]ai.Message)
+}
+
+// trimHistoryBySize trims the oldest messages until total content size is within limit.
+func trimHistoryBySize(history []ai.Message, maxBytes int) []ai.Message {
+	for len(history) > 1 {
+		total := 0
+		for _, msg := range history {
+			for _, b := range msg.Content {
+				total += len(b.Text) + len(b.Content)
+			}
+		}
+		if total <= maxBytes {
+			break
+		}
+		// Drop the oldest message
+		history = history[1:]
+	}
+	return history
 }
 
 // deepCopyContentBlocks creates a deep copy of a slice of ContentBlock structs

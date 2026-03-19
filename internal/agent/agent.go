@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ecopelan/remoteclaw/internal/ai"
-	"github.com/ecopelan/remoteclaw/internal/config"
-	"github.com/ecopelan/remoteclaw/internal/connect"
-	"github.com/ecopelan/remoteclaw/internal/executor"
-	"github.com/ecopelan/remoteclaw/internal/logging"
-	"github.com/ecopelan/remoteclaw/internal/security"
+	"github.com/3rg0n/remoteclaw/internal/ai"
+	"github.com/3rg0n/remoteclaw/internal/config"
+	"github.com/3rg0n/remoteclaw/internal/connect"
+	"github.com/3rg0n/remoteclaw/internal/executor"
+	"github.com/3rg0n/remoteclaw/internal/logging"
+	"github.com/3rg0n/remoteclaw/internal/security"
 	"github.com/rs/zerolog"
 )
 
@@ -42,6 +42,7 @@ type Agent struct {
 	mu             sync.RWMutex
 	lastMsg        time.Time
 	startTime      time.Time
+	connected      bool
 }
 
 // New creates a new Agent with the given configuration
@@ -95,7 +96,7 @@ func New(cfg *config.Config) (*Agent, error) {
 		defer cancel()
 		model := cfg.AI.Model
 		if model == "phi4-mini" || model == "phi4" {
-			model = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+			model = "global.anthropic.claude-sonnet-4-6"
 		}
 		converser, err = ai.NewBedrockClient(ctx, cfg.AWS.Region, model, cfg.AI.Temperature)
 	case "local":
@@ -201,6 +202,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	if err := a.mode.Connect(ctx); err != nil {
 		return fmt.Errorf("failed to connect: %w", err)
 	}
+	a.mu.Lock()
+	a.connected = true
+	a.mu.Unlock()
 	a.logger.Info().Msg("Agent connected to message service")
 
 	// Start health check server if enabled
@@ -235,6 +239,9 @@ func (a *Agent) Run(ctx context.Context) error {
 	a.logger.Info().Msg("Starting graceful shutdown")
 
 	// Close connection
+	a.mu.Lock()
+	a.connected = false
+	a.mu.Unlock()
 	if err := a.mode.Close(); err != nil {
 		a.logger.Error().Err(err).Msg("Error closing connection")
 	}
@@ -246,6 +253,14 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err := a.health.Shutdown(shutdownCtx); err != nil {
 			a.logger.Error().Err(err).Msg("Error shutting down health server")
 		}
+	}
+
+	// Close challenge store and rate limiter background goroutines
+	if a.challengeStore != nil {
+		a.challengeStore.Close()
+	}
+	if a.rateLimiter != nil {
+		a.rateLimiter.Close()
 	}
 
 	// Close audit logger
@@ -298,7 +313,7 @@ func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage)
 	var errMsg string
 	if err != nil {
 		a.logger.Error().Err(err).Msg("Failed to process message")
-		response = fmt.Sprintf("Error processing request: %v", err)
+		response = "Sorry, an internal error occurred while processing your request. Please try again."
 		errMsg = err.Error()
 	}
 

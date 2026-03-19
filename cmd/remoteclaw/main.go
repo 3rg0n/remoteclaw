@@ -5,10 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/ecopelan/remoteclaw/internal/agent"
-	"github.com/ecopelan/remoteclaw/internal/config"
-	"github.com/ecopelan/remoteclaw/internal/logging"
-	"github.com/ecopelan/remoteclaw/internal/service"
+	"github.com/3rg0n/remoteclaw/internal/agent"
+	"github.com/3rg0n/remoteclaw/internal/config"
+	"github.com/3rg0n/remoteclaw/internal/logging"
+	"github.com/3rg0n/remoteclaw/internal/service"
 	"github.com/spf13/cobra"
 )
 

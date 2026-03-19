@@ -11,6 +11,7 @@ type RateLimiter struct {
 	maxPerMinute int
 	burstSize    int
 	buckets      sync.Map // map[string]*bucket
+	stopCh       chan struct{}
 }
 
 type bucket struct {
@@ -25,6 +26,7 @@ func NewRateLimiter(maxPerMinute int, burstSize int) *RateLimiter {
 	rl := &RateLimiter{
 		maxPerMinute: maxPerMinute,
 		burstSize:    burstSize,
+		stopCh:       make(chan struct{}),
 	}
 	// Start a background cleanup goroutine
 	go rl.cleanupLoop()
@@ -61,22 +63,36 @@ func (rl *RateLimiter) Allow(spaceID string) bool {
 	return false
 }
 
+// Close stops the background cleanup goroutine.
+func (rl *RateLimiter) Close() {
+	select {
+	case <-rl.stopCh:
+	default:
+		close(rl.stopCh)
+	}
+}
+
 // cleanupLoop removes entries that haven't been used for over 10 minutes.
 func (rl *RateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		cutoff := time.Now().Add(-10 * time.Minute)
-		rl.buckets.Range(func(key, value any) bool {
-			b := value.(*bucket)
-			b.mu.Lock()
-			stale := b.lastCheck.Before(cutoff)
-			b.mu.Unlock()
-			if stale {
-				rl.buckets.Delete(key)
-			}
-			return true
-		})
+	for {
+		select {
+		case <-rl.stopCh:
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-10 * time.Minute)
+			rl.buckets.Range(func(key, value any) bool {
+				b := value.(*bucket)
+				b.mu.Lock()
+				stale := b.lastCheck.Before(cutoff)
+				b.mu.Unlock()
+				if stale {
+					rl.buckets.Delete(key)
+				}
+				return true
+			})
+		}
 	}
 }

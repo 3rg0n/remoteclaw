@@ -3,8 +3,10 @@ package executor
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 )
@@ -28,18 +30,28 @@ func (e *Executor) readFile(ctx context.Context, params map[string]any) (*ToolRe
 	if err != nil {
 		return &ToolResult{Error: err.Error(), ExitCode: 1}, nil //nolint:nilerr // error is captured in ToolResult
 	}
+	limit := int64(maxBytes)
 
-	// Read file with size limit
-	data, err := os.ReadFile(path) //nolint:gosec // file path from AI model
+	// Open file and read only up to limit+1 bytes to detect truncation
+	f, err := os.Open(path) //nolint:gosec // file path from AI model
+	if err != nil {
+		return &ToolResult{Error: fmt.Sprintf("failed to read file: %v", err), ExitCode: 1}, nil //nolint:nilerr // error is captured in ToolResult
+	}
+	defer func() { _ = f.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
 	if err != nil {
 		return &ToolResult{Error: fmt.Sprintf("failed to read file: %v", err), ExitCode: 1}, nil //nolint:nilerr // error is captured in ToolResult
 	}
 
-	// Check if file exceeds max_bytes
+	truncated := int64(len(data)) > limit
+	if truncated {
+		data = data[:limit]
+	}
+
 	output := string(data)
-	if len(data) > int(maxBytes) {
-		output = string(data[:int(maxBytes)])
-		output += fmt.Sprintf("\n\n[File truncated: %d of %d bytes shown]", int(maxBytes), len(data))
+	if truncated {
+		output += "\n\n[File truncated: output limited to specified max_bytes]"
 	}
 
 	return &ToolResult{
@@ -48,9 +60,54 @@ func (e *Executor) readFile(ctx context.Context, params map[string]any) (*ToolRe
 	}, nil
 }
 
+// sensitivePaths contains directories that write_file should never write to.
+var sensitivePaths = func() []string {
+	paths := []string{
+		"/etc", "/boot", "/sbin", "/usr/sbin",
+		"/root", "/proc", "/sys", "/dev",
+	}
+	if runtime.GOOS == "windows" {
+		paths = append(paths, `C:\Windows`, `C:\Program Files`, `C:\Program Files (x86)`)
+	}
+	// Add home-directory sensitive subdirs
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".ssh"))
+		paths = append(paths, filepath.Join(home, ".gnupg"))
+		paths = append(paths, filepath.Join(home, ".config", "systemd"))
+	}
+	return paths
+}()
+
+// isSensitivePath returns true if the given path falls within a sensitive directory.
+func isSensitivePath(path string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return true // block if we can't resolve
+	}
+	absPath = filepath.Clean(absPath)
+
+	for _, sensitive := range sensitivePaths {
+		senAbs, err := filepath.Abs(sensitive)
+		if err != nil {
+			continue
+		}
+		senAbs = filepath.Clean(senAbs)
+		// Check if absPath is inside or equal to the sensitive dir
+		rel, err := filepath.Rel(senAbs, absPath)
+		if err != nil {
+			continue
+		}
+		if !strings.HasPrefix(rel, "..") {
+			return true
+		}
+	}
+	return false
+}
+
 // writeFile writes content to a file.
 // Required params: "path" (string) - the file path to write
-//                  "content" (string) - the content to write
+//
+//	"content" (string) - the content to write
 func (e *Executor) writeFile(ctx context.Context, params map[string]any) (*ToolResult, error) {
 	path, err := getStringParam(params, "path")
 	if err != nil {
@@ -60,6 +117,14 @@ func (e *Executor) writeFile(ctx context.Context, params map[string]any) (*ToolR
 	content, err := getStringParam(params, "content")
 	if err != nil {
 		return &ToolResult{Error: err.Error(), ExitCode: 1}, nil //nolint:nilerr // error is captured in ToolResult
+	}
+
+	// Block writes to sensitive system directories
+	if isSensitivePath(path) {
+		return &ToolResult{
+			Error:    fmt.Sprintf("write blocked: %s is in a sensitive system directory", path),
+			ExitCode: 1,
+		}, nil
 	}
 
 	// Create directories if they don't exist

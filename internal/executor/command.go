@@ -1,14 +1,16 @@
 package executor
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"runtime"
 	"time"
 )
+
+const maxOutputBytes = 1024 * 1024 // 1MB per stream
 
 // executeCommand executes a shell command and returns the result.
 // Required params: "command" (string) - the shell command to execute
@@ -36,14 +38,22 @@ func (e *Executor) executeCommand(ctx context.Context, params map[string]any) (*
 	ctx, cancel := context.WithTimeout(ctx, timeoutDur)
 	defer cancel()
 
-	// Determine shell based on OS
+	// Determine shell: use configured shell if set, otherwise auto-detect by OS
 	var shellCmd string
 	var shellArgs []string
 
-	if runtime.GOOS == "windows" {
+	switch {
+	case e.shell != "":
+		shellCmd = e.shell
+		if runtime.GOOS == "windows" {
+			shellArgs = []string{"-Command", command}
+		} else {
+			shellArgs = []string{"-c", command}
+		}
+	case runtime.GOOS == "windows":
 		shellCmd = "powershell"
 		shellArgs = []string{"-Command", command}
-	} else {
+	default:
 		shellCmd = "sh"
 		shellArgs = []string{"-c", command}
 	}
@@ -52,13 +62,37 @@ func (e *Executor) executeCommand(ctx context.Context, params map[string]any) (*
 	//nolint:gosec // G204: command and shell are controlled; this is the executor's purpose
 	cmd := exec.CommandContext(ctx, shellCmd, shellArgs...)
 
-	// Capture stdout and stderr separately
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	// Capture stdout and stderr with size limits to prevent OOM
+	stdoutR, stdoutW := io.Pipe()
+	stderrR, stderrW := io.Pipe()
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
+
+	// Read output in background with size limits
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	stdoutCh := make(chan readResult, 1)
+	stderrCh := make(chan readResult, 1)
+	go func() {
+		data, err := io.ReadAll(io.LimitReader(stdoutR, maxOutputBytes))
+		stdoutCh <- readResult{data, err}
+	}()
+	go func() {
+		data, err := io.ReadAll(io.LimitReader(stderrR, maxOutputBytes))
+		stderrCh <- readResult{data, err}
+	}()
 
 	// Execute command
 	err = cmd.Run()
+
+	// Close write ends so readers can finish
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
+
+	stdoutRes := <-stdoutCh
+	stderrRes := <-stderrCh
 
 	// Determine exit code
 	exitCode := 0
@@ -66,7 +100,7 @@ func (e *Executor) executeCommand(ctx context.Context, params map[string]any) (*
 		// Check if it's a context deadline exceeded error
 		if errors.Is(err, context.DeadlineExceeded) {
 			return &ToolResult{
-				Output:   stdout.String(),
+				Output:   string(stdoutRes.data),
 				Error:    "command timed out",
 				ExitCode: 124, // Standard timeout exit code
 			}, nil
@@ -82,8 +116,8 @@ func (e *Executor) executeCommand(ctx context.Context, params map[string]any) (*
 	}
 
 	// Combine output: stdout first, then stderr
-	output := stdout.String()
-	if stderrStr := stderr.String(); stderrStr != "" {
+	output := string(stdoutRes.data)
+	if stderrStr := string(stderrRes.data); stderrStr != "" {
 		if output != "" {
 			output += "\n"
 		}

@@ -1,9 +1,9 @@
 # RemoteClaw Installer — Windows
-# Usage: irm https://raw.githubusercontent.com/ecopelan/remoteclaw/main/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/3rg0n/remoteclaw/main/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
-$Repo        = "ecopelan/remoteclaw"
+$Repo        = "3rg0n/remoteclaw"
 $ReleaseUrl  = "https://github.com/$Repo/releases/latest/download"
 $OllamaModel = "phi4-mini"
 

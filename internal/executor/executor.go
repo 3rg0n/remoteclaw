@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ecopelan/remoteclaw/internal/security"
+	"github.com/3rg0n/remoteclaw/internal/security"
 )
 
 // ToolResult holds the result of a tool execution
@@ -61,8 +61,11 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 }
 
 // ForceExecuteCommand runs a command bypassing the dangerous command checker.
-// Used only after a challenge-response confirmation.
+// Used only after a challenge-response confirmation. Still enforces timeouts.
 func (e *Executor) ForceExecuteCommand(ctx context.Context, command string) (*ToolResult, error) {
+	if command == "" {
+		return &ToolResult{Error: "empty command", ExitCode: 1}, nil
+	}
 	return e.executeCommand(ctx, map[string]any{"command": command})
 }
 

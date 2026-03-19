@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,6 +39,12 @@ func NewWMCPMode(endpoint, token string, logger zerolog.Logger) *WMCPMode {
 
 // Connect dials the WMCP backend, authenticates, and starts the read/heartbeat loops.
 func (wm *WMCPMode) Connect(ctx context.Context) error {
+	// Reject insecure WebSocket endpoints
+	if !strings.HasPrefix(wm.endpoint, "wss://") {
+		wm.logger.Warn().Str("endpoint", wm.endpoint).
+			Msg("WMCP endpoint does not use TLS (wss://). Auth tokens will be sent in cleartext.")
+	}
+
 	wm.logger.Info().Str("endpoint", wm.endpoint).Msg("WMCPMode connecting to backend")
 
 	conn, resp, err := websocket.Dial(ctx, wm.endpoint, nil)

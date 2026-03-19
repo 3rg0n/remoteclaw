@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # RemoteClaw Installer — Linux / macOS
-# Usage: curl -fsSL https://raw.githubusercontent.com/ecopelan/remoteclaw/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/3rg0n/remoteclaw/main/install.sh | bash
 
-REPO="ecopelan/remoteclaw"
+REPO="3rg0n/remoteclaw"
 RELEASE_URL="https://github.com/${REPO}/releases/latest/download"
 OLLAMA_MODEL="phi4-mini"
 

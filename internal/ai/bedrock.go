@@ -48,14 +48,12 @@ func (bc *BedrockClient) Converse(
 
 	// Build inference config
 	// MaxTokens should be a positive int in the normal range
-	if maxTokens < 0 {
+	if maxTokens <= 0 || maxTokens > 100_000 {
 		maxTokens = 4096
 	}
-	// Safe cast since we've validated maxTokens is positive and reasonable
-	//nolint:gosec // G115: maxTokens is validated above
 	temp := float32(bc.temperature)
 	inferenceConfig := &types.InferenceConfiguration{
-		MaxTokens:   int32Ptr(int32(maxTokens)),
+		MaxTokens:   int32Ptr(int32(maxTokens)), //nolint:gosec // G115: maxTokens is range-checked above (0 < n <= 100000)
 		Temperature: &temp,
 	}
 

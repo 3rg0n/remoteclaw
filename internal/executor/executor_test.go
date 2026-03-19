@@ -206,6 +206,35 @@ func TestWriteFileCreate(t *testing.T) {
 	assert.Equal(t, content, string(readContent))
 }
 
+// TestWriteFileSensitivePath tests that writes to sensitive paths are blocked
+func TestWriteFileSensitivePath(t *testing.T) {
+	exec := New(5*time.Second, 30*time.Second, "")
+	ctx := context.Background()
+
+	sensitivePaths := []string{
+		"/etc/passwd",
+		"/etc/shadow",
+	}
+
+	if runtime.GOOS == "windows" {
+		sensitivePaths = []string{
+			`C:\Windows\System32\test.txt`,
+		}
+	}
+
+	for _, path := range sensitivePaths {
+		result, err := exec.Execute(ctx, "write_file", map[string]any{
+			"path":    path,
+			"content": "malicious content",
+		})
+
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		assert.Equal(t, 1, result.ExitCode, "write to %s should be blocked", path)
+		assert.Contains(t, result.Error, "sensitive", "write to %s should mention sensitive", path)
+	}
+}
+
 // TestWriteFileNestedDirs tests creating file with nested directories
 func TestWriteFileNestedDirs(t *testing.T) {
 	exec := New(5*time.Second, 30*time.Second, "")

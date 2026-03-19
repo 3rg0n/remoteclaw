@@ -87,9 +87,9 @@ type HealthConfig struct {
 // Load reads and parses a YAML config file, applies defaults, and validates the configuration.
 // If a .env file exists in the current directory, it is loaded first (does not override system env vars).
 func Load(path string) (*Config, error) {
-	// Load .env file if present — .env values take precedence over system env vars.
-	// If .env does not exist, system env vars are used as-is.
-	_ = godotenv.Overload() // Ignores error if .env doesn't exist
+	// Load .env file if present — Overload() means .env values take precedence
+	// over system env vars. If .env does not exist, the error is ignored.
+	_ = godotenv.Overload()
 
 	cfg := &Config{}
 
@@ -198,7 +198,7 @@ func (c *Config) Validate() error {
 		}
 		// If model is still the local default, override to Bedrock default
 		if c.AI.Model == "phi4-mini" || c.AI.Model == "phi4" {
-			c.AI.Model = "us.anthropic.claude-sonnet-4-20250514-v1:0"
+			c.AI.Model = "global.anthropic.claude-sonnet-4-6"
 		}
 	}
 

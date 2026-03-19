@@ -45,6 +45,7 @@ type ChallengeStore struct {
 	ciphertext string // base64-encoded AES-256-GCM ciphertext (salt + nonce + encrypted)
 	mu         sync.Mutex
 	pending    map[string]*PendingChallenge // keyed by spaceID
+	stopCh     chan struct{}                // signals cleanup goroutine to stop
 }
 
 // NewChallengeStore creates a challenge store with the given encrypted challenge value.
@@ -53,6 +54,7 @@ func NewChallengeStore(encryptedChallenge string) *ChallengeStore {
 	cs := &ChallengeStore{
 		ciphertext: encryptedChallenge,
 		pending:    make(map[string]*PendingChallenge),
+		stopCh:     make(chan struct{}),
 	}
 	if encryptedChallenge != "" {
 		go cs.cleanupLoop()
@@ -116,19 +118,34 @@ func (cs *ChallengeStore) ClearPending(spaceID string) {
 	delete(cs.pending, spaceID)
 }
 
+// Close stops the background cleanup goroutine.
+func (cs *ChallengeStore) Close() {
+	select {
+	case <-cs.stopCh:
+		// already closed
+	default:
+		close(cs.stopCh)
+	}
+}
+
 // cleanupLoop removes expired pending challenges.
 func (cs *ChallengeStore) cleanupLoop() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		cs.mu.Lock()
-		for id, pc := range cs.pending {
-			if time.Since(pc.CreatedAt) > challengeTTL {
-				delete(cs.pending, id)
+	for {
+		select {
+		case <-cs.stopCh:
+			return
+		case <-ticker.C:
+			cs.mu.Lock()
+			for id, pc := range cs.pending {
+				if time.Since(pc.CreatedAt) > challengeTTL {
+					delete(cs.pending, id)
+				}
 			}
+			cs.mu.Unlock()
 		}
-		cs.mu.Unlock()
 	}
 }
 

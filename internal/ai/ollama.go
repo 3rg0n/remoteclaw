@@ -6,7 +6,7 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/ecopelan/remoteclaw/internal/logging"
+	"github.com/3rg0n/remoteclaw/internal/logging"
 	"github.com/ollama/ollama/api"
 )
 
@@ -21,6 +21,9 @@ type OllamaClient struct {
 // NewOllamaClient creates a new Ollama client, verifies the server is
 // reachable, and ensures the model is available locally (pulling if needed).
 func NewOllamaClient(ctx context.Context, model string, temperature float64, ollamaHost string) (*OllamaClient, error) {
+	// NOTE: os.Setenv is process-global and not goroutine-safe. This is acceptable
+	// because NewOllamaClient is called once during startup, before any concurrent use.
+	// The ollama Go SDK requires OLLAMA_HOST to be set before client creation.
 	if ollamaHost != "" {
 		if err := os.Setenv("OLLAMA_HOST", ollamaHost); err != nil {
 			return nil, fmt.Errorf("failed to set OLLAMA_HOST: %w", err)

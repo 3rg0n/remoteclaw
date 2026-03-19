@@ -99,13 +99,13 @@ Webex bots are globally addressable — any Webex user can direct-message any bo
 **Linux/macOS:**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ecopelan/remoteclaw/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/3rg0n/remoteclaw/main/install.sh | bash
 ```
 
 **Windows (PowerShell as Admin):**
 
 ```powershell
-irm https://raw.githubusercontent.com/ecopelan/remoteclaw/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/3rg0n/remoteclaw/main/install.ps1 | iex
 ```
 
 The installer downloads the binary, installs Ollama + model, walks you through configuration, and registers RemoteClaw as a system service.
@@ -198,7 +198,7 @@ The WMCP client handles authentication, heartbeats (every 30s), and automatic re
 | Provider | Config | Model | Requirements |
 |----------|--------|-------|-------------|
 | Local (Ollama) | `provider: "local"` | `phi4-mini` (3.8B, default) or `phi4` (14B) | Ollama running locally |
-| AWS Bedrock | `provider: "bedrock"` | `us.anthropic.claude-sonnet-4-20250514-v1:0` | AWS credentials |
+| AWS Bedrock | `provider: "bedrock"` | `global.anthropic.claude-sonnet-4-6` | AWS credentials |
 | Auto (default) | `provider: "auto"` | — | Uses Bedrock if `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` are set, otherwise local |
 
 ## Security

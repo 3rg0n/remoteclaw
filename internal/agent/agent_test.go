@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ecopelan/remoteclaw/internal/ai"
-	"github.com/ecopelan/remoteclaw/internal/config"
-	"github.com/ecopelan/remoteclaw/internal/connect"
-	"github.com/ecopelan/remoteclaw/internal/executor"
-	"github.com/ecopelan/remoteclaw/internal/logging"
+	"github.com/3rg0n/remoteclaw/internal/ai"
+	"github.com/3rg0n/remoteclaw/internal/config"
+	"github.com/3rg0n/remoteclaw/internal/connect"
+	"github.com/3rg0n/remoteclaw/internal/executor"
+	"github.com/3rg0n/remoteclaw/internal/logging"
 )
 
 // MockConverser is a mock implementation of ai.Converser for testing
@@ -191,12 +191,12 @@ func TestHealthHandlerJSON(t *testing.T) {
 		t.Fatalf("failed to parse JSON response: %v", err)
 	}
 
-	// Verify response fields
-	if resp.Status != "healthy" {
-		t.Errorf("expected status 'healthy', got %q", resp.Status)
+	// Verify response fields — agent not connected in test, so status is "disconnected"
+	if resp.Status != "disconnected" {
+		t.Errorf("expected status 'disconnected', got %q", resp.Status)
 	}
-	if resp.Connected != true {
-		t.Errorf("expected connected true, got %v", resp.Connected)
+	if resp.Connected != false {
+		t.Errorf("expected connected false, got %v", resp.Connected)
 	}
 	if resp.Uptime == "" {
 		t.Error("expected non-empty uptime")
