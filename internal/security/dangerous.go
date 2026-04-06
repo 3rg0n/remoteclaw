@@ -54,18 +54,47 @@ func NewDangerousChecker() *DangerousChecker {
 
 		// Privilege escalation
 		{`\bsudo\b`, "privilege escalation via sudo"},
+		{`\bdoas\b`, "privilege escalation via doas"},
 		{`\brunas\b`, "privilege escalation via runas"},
 		{`\bsu\s+-`, "privilege escalation via su"},
+		{`\bpkexec\b`, "privilege escalation via pkexec"},
 
 		// Shell evaluation/indirection (bypass attempts)
 		{`\beval\b`, "shell eval (potential bypass)"},
 		{`\bexec\b`, "shell exec (potential bypass)"},
+		{`\bsource\s+/`, "sourcing script from absolute path"},
+
+		// Command substitution and shell metacharacter abuse
+		{`\$\(`, "command substitution ($(...))"},
+		{"`.+`", "backtick command substitution"},
+
+		// Environment variable injection
+		{`\bLD_PRELOAD\b`, "LD_PRELOAD environment injection"},
+		{`\bLD_LIBRARY_PATH\b`, "LD_LIBRARY_PATH environment injection"},
+
+		// Kernel module loading
+		{`\binsmod\b`, "kernel module loading via insmod"},
+		{`\bmodprobe\b`, "kernel module loading via modprobe"},
+		{`\brmmod\b`, "kernel module removal via rmmod"},
+
+		// Scheduled execution
+		{`\bcrontab\b`, "crontab modification"},
+		{`\bat\s+`, "at job scheduling"},
+
+		// Container escape
+		{`docker\s+run\s+.*--privileged`, "privileged container execution"},
+		{`podman\s+run\s+.*--privileged`, "privileged container execution"},
 
 		// Network exfiltration patterns (piping remote content to shell)
 		{`curl\s+.*\|\s*(ba)?sh`, "piping remote content to shell"},
 		{`wget\s+.*\|\s*(ba)?sh`, "piping remote content to shell"},
 		{`curl\s+.*\|\s*python`, "piping remote content to interpreter"},
 		{`wget\s+.*\|\s*python`, "piping remote content to interpreter"},
+
+		// Reverse shell patterns
+		{`/dev/tcp/`, "potential reverse shell via /dev/tcp"},
+		{`\bnc\s+.*-[elp]`, "potential reverse shell via netcat"},
+		{`\bncat\b.*-[elp]`, "potential reverse shell via ncat"},
 	}
 
 	for _, r := range rules {

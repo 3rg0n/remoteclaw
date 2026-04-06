@@ -2,25 +2,31 @@ package agent
 
 import (
 	"sync"
+	"time"
 
 	"github.com/3rg0n/remoteclaw/internal/ai"
 )
 
-const maxHistoryBytes = 512 * 1024 // 512KB total content size cap per conversation
+const maxHistoryBytes = 128 * 1024 // 128KB total content size cap per conversation
+
+// conversationTTL is how long an idle conversation is kept before cleanup.
+const conversationTTL = 24 * time.Hour
 
 // ConversationManager manages per-user/space conversation history
 type ConversationManager struct {
-	histories map[string][]ai.Message
-	maxLen    int
-	mu        sync.RWMutex
+	histories  map[string][]ai.Message
+	lastAccess map[string]time.Time // tracks last access for TTL cleanup
+	maxLen     int
+	mu         sync.RWMutex
 }
 
 // NewConversationManager creates a new conversation manager with a maximum history length.
 // key is typically the spaceID or userEmail.
 func NewConversationManager(maxHistory int) *ConversationManager {
 	return &ConversationManager{
-		histories: make(map[string][]ai.Message),
-		maxLen:    maxHistory,
+		histories:  make(map[string][]ai.Message),
+		lastAccess: make(map[string]time.Time),
+		maxLen:     maxHistory,
 	}
 }
 
@@ -34,6 +40,11 @@ func (cm *ConversationManager) GetHistory(key string) []ai.Message {
 	if !ok {
 		return []ai.Message{}
 	}
+	cm.mu.RUnlock()
+	cm.mu.Lock()
+	cm.lastAccess[key] = time.Now()
+	cm.mu.Unlock()
+	cm.mu.RLock()
 
 	// Return a deep copy to prevent external modifications
 	historyCopy := make([]ai.Message, len(history))
@@ -70,6 +81,10 @@ func (cm *ConversationManager) UpdateHistory(key string, history []ai.Message) {
 	historyCopy = trimHistoryBySize(historyCopy, maxHistoryBytes)
 
 	cm.histories[key] = historyCopy
+	cm.lastAccess[key] = time.Now()
+
+	// Clean up stale conversations while we hold the lock
+	cm.cleanupStaleLocked()
 }
 
 // Clear removes the conversation history for a specific key.
@@ -78,6 +93,7 @@ func (cm *ConversationManager) Clear(key string) {
 	defer cm.mu.Unlock()
 
 	delete(cm.histories, key)
+	delete(cm.lastAccess, key)
 }
 
 // ClearAll removes all conversation histories.
@@ -86,6 +102,19 @@ func (cm *ConversationManager) ClearAll() {
 	defer cm.mu.Unlock()
 
 	cm.histories = make(map[string][]ai.Message)
+	cm.lastAccess = make(map[string]time.Time)
+}
+
+// cleanupStaleLocked removes conversations that haven't been accessed within conversationTTL.
+// Must be called with cm.mu held for writing.
+func (cm *ConversationManager) cleanupStaleLocked() {
+	cutoff := time.Now().Add(-conversationTTL)
+	for key, last := range cm.lastAccess {
+		if last.Before(cutoff) {
+			delete(cm.histories, key)
+			delete(cm.lastAccess, key)
+		}
+	}
 }
 
 // trimHistoryBySize trims the oldest messages until total content size is within limit.

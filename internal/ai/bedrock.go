@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/3rg0n/remoteclaw/internal/logging"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
@@ -165,7 +166,10 @@ func bedrockContentToContent(blocks []types.ContentBlock) []ContentBlock {
 				// Try to deserialize the document
 				err := toolUseBlock.Input.UnmarshalSmithyDocument(&inputMap)
 				if err != nil {
-					// If unmarshal fails, create empty map
+					// Log deserialization failure for debugging — silent failures mask bugs
+					logger := logging.Get()
+					logger.Warn().Err(err).Str("tool", derefString(toolUseBlock.Name)).
+						Msg("Failed to unmarshal Bedrock tool input, using empty map")
 					inputMap = make(map[string]any)
 				}
 			}

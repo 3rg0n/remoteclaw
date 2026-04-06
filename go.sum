@@ -1,5 +1,3 @@
-github.com/3rg0n/webex-message-handler/go v0.5.1 h1:QuXj93oE/4lO01qlqrYMdRUh19Ud7iLdFL+NMwjVxRg=
-github.com/3rg0n/webex-message-handler/go v0.5.1/go.mod h1:dioMgk1Dc+5jikIZhiE84mWHGQLw6jgcDwGXnkuEbR0=
 github.com/3rg0n/webex-message-handler/go v0.6.0 h1:q5hQO9J8Bgooi6I3RO0WjYJeiaTik71b38GH72CZ77c=
 github.com/3rg0n/webex-message-handler/go v0.6.0/go.mod h1:dioMgk1Dc+5jikIZhiE84mWHGQLw6jgcDwGXnkuEbR0=
 github.com/aws/aws-sdk-go-v2 v1.41.4 h1:10f50G7WyU02T56ox1wWXq+zTX9I1zxG46HYuG1hH/k=
@@ -79,8 +77,8 @@ github.com/mattn/go-isatty v0.0.16/go.mod h1:kYGgaQfpe5nmfYZH+SKPsOc2e4SrIfOl2e/
 github.com/mattn/go-isatty v0.0.19/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
 github.com/mattn/go-isatty v0.0.20 h1:xfD0iDuEKnDkl03q4limB+vH+GxLEtL/jb4xVJSWWEY=
 github.com/mattn/go-isatty v0.0.20/go.mod h1:W+V8PltTTMOvKvAeJH7IuucS94S2C6jfK/D7dTCTo3Y=
-github.com/ollama/ollama v0.18.2 h1:RsOY8oZ6TufRiPgsSlKJp4/V/X+oBREscUlEHZfd554=
-github.com/ollama/ollama v0.18.2/go.mod h1:tCX4IMV8DHjl3zY0THxuEkpWDZSOchJpzTuLACpMwFw=
+github.com/ollama/ollama v0.20.2 h1:7MTLoB/iqMFb370pKpf8XES/CtkM6Sa9yd/qCk43TUM=
+github.com/ollama/ollama v0.20.2/go.mod h1:tCX4IMV8DHjl3zY0THxuEkpWDZSOchJpzTuLACpMwFw=
 github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0t5Ec4=
 github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=

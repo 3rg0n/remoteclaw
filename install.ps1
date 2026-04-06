@@ -68,6 +68,7 @@ function Install-Binary {
     $arch  = Get-Arch
     $asset = "remoteclaw-windows-${arch}.exe"
     $url   = "$ReleaseUrl/$asset"
+    $checksumsUrl = "$ReleaseUrl/CHECKSUMS.txt"
 
     Write-Info "Downloading $asset from GitHub Releases…"
 
@@ -76,13 +77,39 @@ function Install-Binary {
     }
 
     $tmpFile = Join-Path $env:TEMP "remoteclaw-download.exe"
+    $tmpChecksums = Join-Path $env:TEMP "remoteclaw-CHECKSUMS.txt"
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $url -OutFile $tmpFile -UseBasicParsing
+        Invoke-WebRequest -Uri $checksumsUrl -OutFile $tmpChecksums -UseBasicParsing
     }
     catch {
         Write-Err "Download failed: $_"
         exit 1
+    }
+
+    # Verify checksum
+    try {
+        $expected = (Get-Content $tmpChecksums | Where-Object { $_ -match $asset }) -replace '\s+.*$',''
+        if ($expected) {
+            $actual = (Get-FileHash -Path $tmpFile -Algorithm SHA256).Hash.ToLower()
+            if ($expected.ToLower() -ne $actual) {
+                Write-Err "Checksum verification FAILED for $asset"
+                Write-Err "  Expected: $expected"
+                Write-Err "  Actual:   $actual"
+                Write-Err "The downloaded binary may be corrupted or tampered with."
+                exit 1
+            }
+            Write-Ok "Checksum verified for $asset"
+        } else {
+            Write-Warn "Could not find checksum for $asset in CHECKSUMS.txt — skipping verification"
+        }
+    }
+    catch {
+        Write-Warn "Checksum verification skipped: $_"
+    }
+    finally {
+        Remove-Item $tmpChecksums -Force -ErrorAction SilentlyContinue
     }
 
     Copy-Item $tmpFile $BinPath -Force

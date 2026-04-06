@@ -95,17 +95,54 @@ check_existing() {
 download_binary() {
     local asset="remoteclaw-${OS}-${ARCH}"
     local url="${RELEASE_URL}/${asset}"
+    local checksums_url="${RELEASE_URL}/CHECKSUMS.txt"
 
     TMPDIR_INSTALL="$(mktemp -d)"
     local tmp_bin="${TMPDIR_INSTALL}/remoteclaw"
+    local tmp_checksums="${TMPDIR_INSTALL}/CHECKSUMS.txt"
 
     info "Downloading ${asset} from GitHub Releases…"
     if command -v curl >/dev/null 2>&1; then
         curl -fSL --progress-bar -o "$tmp_bin" "$url"
+        curl -fsSL -o "$tmp_checksums" "$checksums_url"
     elif command -v wget >/dev/null 2>&1; then
         wget -q --show-progress -O "$tmp_bin" "$url"
+        wget -q -O "$tmp_checksums" "$checksums_url"
     else
         err "Neither curl nor wget found. Cannot download."; exit 1
+    fi
+
+    # Verify checksum
+    if command -v sha256sum >/dev/null 2>&1; then
+        local expected
+        expected="$(grep "${asset}$" "$tmp_checksums" | awk '{print $1}')"
+        if [ -z "$expected" ]; then
+            warn "Could not find checksum for ${asset} in CHECKSUMS.txt — skipping verification"
+        else
+            local actual
+            actual="$(sha256sum "$tmp_bin" | awk '{print $1}')"
+            if [ "$expected" != "$actual" ]; then
+                err "Checksum verification FAILED for ${asset}"
+                err "  Expected: ${expected}"
+                err "  Actual:   ${actual}"
+                err "The downloaded binary may be corrupted or tampered with."
+                exit 1
+            fi
+            ok "Checksum verified for ${asset}"
+        fi
+    elif command -v shasum >/dev/null 2>&1; then
+        local expected
+        expected="$(grep "${asset}$" "$tmp_checksums" | awk '{print $1}')"
+        if [ -n "$expected" ]; then
+            local actual
+            actual="$(shasum -a 256 "$tmp_bin" | awk '{print $1}')"
+            if [ "$expected" != "$actual" ]; then
+                err "Checksum verification FAILED for ${asset}"; exit 1
+            fi
+            ok "Checksum verified for ${asset}"
+        fi
+    else
+        warn "sha256sum/shasum not found — skipping checksum verification"
     fi
 
     $SUDO install -m 755 "$tmp_bin" "$BIN_PATH"

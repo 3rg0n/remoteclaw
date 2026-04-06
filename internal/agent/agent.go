@@ -49,6 +49,19 @@ type Agent struct {
 func New(cfg *config.Config) (*Agent, error) {
 	logger := logging.Get()
 
+	// Security: warn if running as root/Administrator — the agent should
+	// run under a dedicated low-privilege user account.
+	if currentUser, err := user.Current(); err == nil {
+		if currentUser.Uid == "0" || currentUser.Username == "root" {
+			logger.Warn().Msg("Running as root is strongly discouraged — use a dedicated low-privilege user")
+		}
+	}
+
+	// Enforce mandatory audit logging when dangerous commands or challenge-response are enabled
+	if cfg.Security.AuditLog == "" && (cfg.Security.DangerousCommands || cfg.Security.Challenge != "") {
+		logger.Warn().Msg("Audit logging is disabled but security features are enabled — strongly recommend setting security.audit_log")
+	}
+
 	// Create executor with config timeouts
 	exec := executor.New(cfg.Execution.DefaultTimeout, cfg.Execution.MaxTimeout, cfg.Execution.Shell)
 
@@ -320,12 +333,16 @@ func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage)
 	// Update conversation history
 	a.conversations.UpdateHistory(conversationKey, updatedHistory)
 
-	// Extract tool call names for audit
+	// Extract tool call names and inputs for audit
 	var toolCalls []string
+	var toolInputs []string
 	for _, m := range updatedHistory {
 		for _, b := range m.Content {
 			if b.Type == "tool_use" {
 				toolCalls = append(toolCalls, b.ToolName)
+				// Serialize tool input for audit trail
+				inputStr := fmt.Sprintf("%s(%v)", b.ToolName, b.Input)
+				toolInputs = append(toolInputs, inputStr)
 			}
 		}
 	}
@@ -338,6 +355,7 @@ func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage)
 			SpaceID:    msg.SpaceID,
 			RawMessage: msg.Text,
 			ToolCalls:  toolCalls,
+			ToolInputs: toolInputs,
 			Response:   response,
 			Duration:   time.Since(start),
 			Error:      errMsg,
@@ -377,7 +395,7 @@ func (a *Agent) handleChallengeConfirmation(ctx context.Context, msg connect.Inc
 		}
 	}
 
-	// Log audit entry for the confirmed execution
+	// Log audit entry for the confirmed execution — marked as confirmed
 	if a.audit != nil {
 		a.audit.Log(logging.AuditEntry{
 			Timestamp:  start,
@@ -385,9 +403,11 @@ func (a *Agent) handleChallengeConfirmation(ctx context.Context, msg connect.Inc
 			SpaceID:    msg.SpaceID,
 			RawMessage: fmt.Sprintf("[challenge confirmed] %s", pc.Command),
 			ToolCalls:  []string{"execute_command"},
+			ToolInputs: []string{fmt.Sprintf("execute_command(command=%q)", pc.Command)},
 			Response:   response,
 			Duration:   time.Since(start),
 			Error:      errMsg,
+			Confirmed:  true,
 		})
 	}
 

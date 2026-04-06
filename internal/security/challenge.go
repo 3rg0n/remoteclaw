@@ -37,6 +37,10 @@ type PendingChallenge struct {
 	CreatedAt time.Time
 }
 
+// maxChallengeAttempts is the maximum number of failed passphrase attempts per space
+// before the pending challenge is revoked.
+const maxChallengeAttempts = 3
+
 // ChallengeStore manages pending challenge-response confirmations for destructive commands.
 // The challenge value is an AES-256-GCM encrypted sentinel. When a user responds with
 // the correct passphrase, the system derives the AES key via scrypt and attempts to
@@ -45,7 +49,8 @@ type ChallengeStore struct {
 	ciphertext string // base64-encoded AES-256-GCM ciphertext (salt + nonce + encrypted)
 	mu         sync.Mutex
 	pending    map[string]*PendingChallenge // keyed by spaceID
-	stopCh     chan struct{}                // signals cleanup goroutine to stop
+	attempts   map[string]int               // failed attempt count per spaceID
+	stopCh     chan struct{}                 // signals cleanup goroutine to stop
 }
 
 // NewChallengeStore creates a challenge store with the given encrypted challenge value.
@@ -54,6 +59,7 @@ func NewChallengeStore(encryptedChallenge string) *ChallengeStore {
 	cs := &ChallengeStore{
 		ciphertext: encryptedChallenge,
 		pending:    make(map[string]*PendingChallenge),
+		attempts:   make(map[string]int),
 		stopCh:     make(chan struct{}),
 	}
 	if encryptedChallenge != "" {
@@ -83,31 +89,65 @@ func (cs *ChallengeStore) SetPending(spaceID, command, reason string) {
 // as the passphrase. If decryption succeeds and the plaintext matches the sentinel,
 // and there is a non-expired pending command for this space, returns the pending
 // challenge. The pending entry is removed on success.
+// Enforces a brute-force limit: after maxChallengeAttempts failed attempts, the
+// pending challenge for that space is revoked.
 func (cs *ChallengeStore) CheckResponse(spaceID, text string) (*PendingChallenge, bool) {
 	if cs.ciphertext == "" || text == "" {
 		return nil, false
 	}
 
-	// Try to decrypt — this is the authentication step
+	cs.mu.Lock()
+	// Check if there is a pending challenge before doing expensive scrypt work
+	pc, ok := cs.pending[spaceID]
+	if !ok {
+		cs.mu.Unlock()
+		return nil, false
+	}
+	// Check TTL
+	if time.Since(pc.CreatedAt) > challengeTTL {
+		delete(cs.pending, spaceID)
+		delete(cs.attempts, spaceID)
+		cs.mu.Unlock()
+		return nil, false
+	}
+	// Check brute-force limit
+	if cs.attempts[spaceID] >= maxChallengeAttempts {
+		delete(cs.pending, spaceID)
+		delete(cs.attempts, spaceID)
+		cs.mu.Unlock()
+		return nil, false
+	}
+	cs.mu.Unlock()
+
+	// Try to decrypt — this is the authentication step (expensive scrypt)
 	if !verifyPassphrase(cs.ciphertext, text) {
+		cs.mu.Lock()
+		cs.attempts[spaceID]++
+		if cs.attempts[spaceID] >= maxChallengeAttempts {
+			// Revoke the pending challenge after too many failed attempts
+			delete(cs.pending, spaceID)
+			delete(cs.attempts, spaceID)
+		}
+		cs.mu.Unlock()
 		return nil, false
 	}
 
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
-	pc, ok := cs.pending[spaceID]
+	// Re-check pending (may have been cleaned up concurrently)
+	pc, ok = cs.pending[spaceID]
 	if !ok {
 		return nil, false
 	}
-
-	// Check TTL
 	if time.Since(pc.CreatedAt) > challengeTTL {
 		delete(cs.pending, spaceID)
+		delete(cs.attempts, spaceID)
 		return nil, false
 	}
 
 	delete(cs.pending, spaceID)
+	delete(cs.attempts, spaceID)
 	return pc, true
 }
 

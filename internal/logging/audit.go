@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -19,16 +20,21 @@ const (
 	auditDateFormat = "2006-01-02"
 )
 
+// maxAuditFieldBytes caps individual string fields in audit entries to prevent log bloat.
+const maxAuditFieldBytes = 10 * 1024 // 10KB
+
 // AuditEntry represents a single audit log entry
 type AuditEntry struct {
-	Timestamp  time.Time     `json:"timestamp"`
-	Email      string        `json:"email"`
-	SpaceID    string        `json:"space_id"`
-	RawMessage string        `json:"raw_message"`
-	ToolCalls  []string      `json:"tool_calls,omitempty"`
-	Response   string        `json:"response"`
-	Duration   time.Duration `json:"duration_ms"`
-	Error      string        `json:"error,omitempty"`
+	Timestamp      time.Time     `json:"timestamp"`
+	Email          string        `json:"email"`
+	SpaceID        string        `json:"space_id"`
+	RawMessage     string        `json:"raw_message"`
+	ToolCalls      []string      `json:"tool_calls,omitempty"`
+	ToolInputs     []string      `json:"tool_inputs,omitempty"` // serialized tool parameters
+	Response       string        `json:"response"`
+	Duration       time.Duration `json:"duration_ms"`
+	Error          string        `json:"error,omitempty"`
+	Confirmed      bool          `json:"confirmed,omitempty"` // true if via challenge-response
 }
 
 // AuditLogger writes structured NDJSON audit entries with daily rotation and 30-day retention.
@@ -82,7 +88,37 @@ func NewAuditLogger(basePath string) (*AuditLogger, error) {
 	return al, nil
 }
 
+// secretPatterns matches common secret formats for redaction in audit logs.
+var secretPatterns = regexp.MustCompile(
+	`(?i)` + // case-insensitive
+		`(?:` +
+		`(?:api[_-]?key|token|secret|password|passwd|authorization|bearer)\s*[:=]\s*\S+` + // key=value patterns
+		`|` +
+		`(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}` + // GitHub tokens
+		`|` +
+		`(?:xoxb|xoxp|xoxs)-[A-Za-z0-9-]+` + // Slack tokens
+		`|` +
+		`AKIA[0-9A-Z]{16}` + // AWS access key
+		`|` +
+		`-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----` + // Private keys
+		`)`,
+)
+
+// scrubSecrets redacts common secret patterns from a string.
+func scrubSecrets(s string) string {
+	return secretPatterns.ReplaceAllString(s, "[REDACTED]")
+}
+
+// truncateField truncates a string to maxAuditFieldBytes.
+func truncateField(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "...[truncated]"
+}
+
 // Log writes an audit entry as an NDJSON line. Rotates the file if the date has changed.
+// Scrubs secrets and truncates large fields before writing.
 func (al *AuditLogger) Log(entry AuditEntry) {
 	if al == nil {
 		return
@@ -93,20 +129,32 @@ func (al *AuditLogger) Log(entry AuditEntry) {
 
 	// Rotate if we've crossed into a new day
 	if err := al.rotateIfNeeded(); err != nil {
-		// If rotation fails, attempt to log to the current file anyway
-		_ = err
+		// Log rotation failure to stderr as a last resort
+		_, _ = fmt.Fprintf(os.Stderr, "audit log rotation failed: %v\n", err)
 	}
 
-	al.logger.Info().
+	// Scrub secrets and truncate fields
+	rawMsg := truncateField(scrubSecrets(entry.RawMessage), maxAuditFieldBytes)
+	response := truncateField(scrubSecrets(entry.Response), maxAuditFieldBytes)
+
+	evt := al.logger.Info().
 		Time("timestamp", entry.Timestamp).
 		Str("email", entry.Email).
 		Str("space_id", entry.SpaceID).
-		Str("raw_message", entry.RawMessage).
+		Str("raw_message", rawMsg).
 		Strs("tool_calls", entry.ToolCalls).
-		Str("response", entry.Response).
+		Str("response", response).
 		Int64("duration_ms", entry.Duration.Milliseconds()).
-		Str("error", entry.Error).
-		Msg("audit")
+		Str("error", entry.Error)
+
+	if len(entry.ToolInputs) > 0 {
+		evt = evt.Strs("tool_inputs", entry.ToolInputs)
+	}
+	if entry.Confirmed {
+		evt = evt.Bool("confirmed", true)
+	}
+
+	evt.Msg("audit")
 }
 
 // Close closes the current file handle.

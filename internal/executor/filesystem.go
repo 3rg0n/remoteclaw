@@ -79,12 +79,19 @@ var sensitivePaths = func() []string {
 }()
 
 // isSensitivePath returns true if the given path falls within a sensitive directory.
+// Resolves symlinks to prevent symlink-based bypasses.
 func isSensitivePath(path string) bool {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
 		return true // block if we can't resolve
 	}
 	absPath = filepath.Clean(absPath)
+
+	// Resolve symlinks to prevent symlink bypass attacks
+	if resolved, err := filepath.EvalSymlinks(absPath); err == nil {
+		absPath = resolved
+	}
+	// If EvalSymlinks fails (target doesn't exist yet for writes), use the cleaned path
 
 	for _, sensitive := range sensitivePaths {
 		senAbs, err := filepath.Abs(sensitive)

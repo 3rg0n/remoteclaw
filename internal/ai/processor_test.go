@@ -341,7 +341,7 @@ func TestProcessorWithHistory(t *testing.T) {
 	// History should have the initial messages plus new ones
 	assert.Equal(t, 4, len(history))
 	assert.Equal(t, "First message", history[0].Content[0].Text)
-	assert.Equal(t, "Second message", history[2].Content[0].Text)
+	assert.Contains(t, history[2].Content[0].Text, "Second message")
 }
 
 func TestProcessorContextCancellation(t *testing.T) {

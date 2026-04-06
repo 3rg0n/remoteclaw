@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
+	"time"
 )
 
 // Converser interface for mocking Bedrock in tests
@@ -55,20 +57,49 @@ func NewProcessor(cfg ProcessorConfig) *Processor {
 	}
 }
 
+// maxProcessDuration is the hard timeout for an entire Process() call.
+const maxProcessDuration = 5 * time.Minute
+
+// maxToolResultBytes caps individual tool result content passed back to the LLM.
+const maxToolResultBytes = 32 * 1024 // 32KB
+
+// wrapUserInput wraps user input in XML delimiters to prevent prompt injection.
+func wrapUserInput(text string) string {
+	return "<user_input>\n" + text + "\n</user_input>"
+}
+
+// sanitizeToolOutput wraps tool output in delimiters and truncates if too large.
+func sanitizeToolOutput(result string) string {
+	if len(result) > maxToolResultBytes {
+		result = result[:maxToolResultBytes] + "\n[output truncated]"
+	}
+	// Defang potential injection patterns in tool output
+	result = strings.ReplaceAll(result, "<user_input>", "&lt;user_input&gt;")
+	result = strings.ReplaceAll(result, "</user_input>", "&lt;/user_input&gt;")
+	return "<tool_output>\n" + result + "\n</tool_output>"
+}
+
 // Process runs the agentic loop to process a user message
 func (p *Processor) Process(
 	ctx context.Context,
 	userMessage string,
 	history []Message,
 ) (string, []Message, error) {
+	// Enforce a hard deadline on the entire processing loop
+	ctx, cancel := context.WithTimeout(ctx, maxProcessDuration)
+	defer cancel()
+
 	// Create a working copy of history to avoid mutating the input
 	workingHistory := slices.Clone(history)
 
-	// Append user message to history
+	// Append user message wrapped in delimiters to prevent prompt injection
 	workingHistory = append(workingHistory, Message{
 		Role:    "user",
-		Content: []ContentBlock{{Type: "text", Text: userMessage}},
+		Content: []ContentBlock{{Type: "text", Text: wrapUserInput(userMessage)}},
 	})
+
+	// Track consecutive tool errors for circuit breaker
+	consecutiveErrors := 0
 
 	// Run agentic loop
 	for iteration := 0; iteration < p.maxIter; iteration++ {
@@ -97,24 +128,36 @@ func (p *Processor) Process(
 
 		// Execute tools and collect results
 		toolResults := make([]ContentBlock, 0, len(toolCalls))
+		iterationHadError := false
 		for _, toolCall := range toolCalls {
 			result, err := p.executeTool(ctx, toolCall.ToolName, toolCall.Input)
 			if err != nil {
+				iterationHadError = true
 				result = fmt.Sprintf("Error: %v", err)
 				toolResults = append(toolResults, ContentBlock{
 					Type:      "tool_result",
 					ToolUseID: toolCall.ToolUseID,
-					Content:   result,
+					Content:   sanitizeToolOutput(result),
 					IsError:   true,
 				})
 			} else {
 				toolResults = append(toolResults, ContentBlock{
 					Type:      "tool_result",
 					ToolUseID: toolCall.ToolUseID,
-					Content:   result,
+					Content:   sanitizeToolOutput(result),
 					IsError:   false,
 				})
 			}
+		}
+
+		// Circuit breaker: abort if too many consecutive tool errors
+		if iterationHadError {
+			consecutiveErrors++
+		} else {
+			consecutiveErrors = 0
+		}
+		if consecutiveErrors >= 3 {
+			return "I've encountered repeated errors and stopped to avoid further issues. Please review and try again.", workingHistory, nil
 		}
 
 		// Append user message with tool results

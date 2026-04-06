@@ -202,5 +202,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Cap temperature to 0.3 for security consistency — high temperatures
+	// increase non-determinism which can cause intermittent safety bypass.
+	if c.AI.Temperature > 0.3 {
+		c.AI.Temperature = 0.3
+	}
+
 	return nil
 }
