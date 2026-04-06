@@ -97,8 +97,10 @@ func (e *Executor) executeCommand(ctx context.Context, params map[string]any) (*
 	// Determine exit code
 	exitCode := 0
 	if err != nil {
-		// Check if it's a context deadline exceeded error
-		if errors.Is(err, context.DeadlineExceeded) {
+		// Check if it's a context deadline exceeded error (check both the
+		// error chain and the context directly, since Go 1.20+ may wrap
+		// the context error differently when killing a process group)
+		if errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded {
 			return &ToolResult{
 				Output:   string(stdoutRes.data),
 				Error:    "command timed out",
@@ -109,8 +111,12 @@ func (e *Executor) executeCommand(ctx context.Context, params map[string]any) (*
 		// Extract exit code if available
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			if exitErr.ExitCode() >= 0 {
-				exitCode = exitErr.ExitCode()
+			code := exitErr.ExitCode()
+			if code >= 0 {
+				exitCode = code
+			} else {
+				// Negative exit code means killed by signal (e.g., SIGKILL)
+				exitCode = 137 // 128 + 9 (SIGKILL)
 			}
 		}
 	}
