@@ -1,0 +1,25 @@
+internal/executor/command.go
+  daa6702bfadeb202 100-103,114-119
+.golangci.yml
+  daa6702bfadeb202 1-2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "f27ff9f3b8d07b97cc73a8710ef092e9d4f90aa9",
+  "prompts": {
+    "daa6702bfadeb202": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd5edaf2-003c-422c-b789-5219f1ec6c94",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland",
+      "messages": [],
+      "total_additions": 12,
+      "total_deletions": 4,
+      "accepted_lines": 12,
+      "overriden_lines": 0
+    }
+  }
+}
