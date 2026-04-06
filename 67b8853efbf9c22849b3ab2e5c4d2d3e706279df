@@ -1,0 +1,53 @@
+.github/workflows/release.yml
+  daa6702bfadeb202 15-16,29-34,43,46,66,75,85
+internal/logging/audit.go
+  daa6702bfadeb202 7,23-25,28-37,91-119,121,132-133,136-140,144,146,148-157
+internal/config/config.go
+  daa6702bfadeb202 205-210
+internal/executor/executor.go
+  daa6702bfadeb202 63-65,70-72
+internal/ai/processor.go
+  daa6702bfadeb202 7-8,60-81,88-91,95,98,101-102,131,135,140,147,153-160
+install.sh
+  daa6702bfadeb202 98,102,107,110,115-145
+internal/ai/bedrock.go
+  daa6702bfadeb202 7,169-172
+CHANGELOG.md
+  daa6702bfadeb202 1-38
+internal/agent/conversation.go
+  daa6702bfadeb202 5,10,12-13,17-20,27-29,43-47,84-87,96,105-117
+internal/ai/prompt.go
+  daa6702bfadeb202 25-32,34-40
+install.ps1
+  daa6702bfadeb202 71,80,84,91-112
+internal/security/challenge.go
+  daa6702bfadeb202 40-43,52-53,62,92-93,99-122,124-131,138-139,145,150
+THREAT_MODEL.md
+  daa6702bfadeb202 1-361
+Makefile
+  daa6702bfadeb202 40-42
+internal/agent/agent.go
+  daa6702bfadeb202 52-64,336,338,343-345,358,398,406,410
+internal/ai/processor_test.go
+  daa6702bfadeb202 344
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "67b8853efbf9c22849b3ab2e5c4d2d3e706279df",
+  "prompts": {
+    "daa6702bfadeb202": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fd5edaf2-003c-422c-b789-5219f1ec6c94",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Ergon Copeland",
+      "messages": [],
+      "total_additions": 725,
+      "total_deletions": 51,
+      "accepted_lines": 724,
+      "overriden_lines": 0
+    }
+  }
+}
