@@ -98,88 +98,40 @@ func New(cfg *config.Config) (*Agent, error) {
 		logger.Info().Msg("Challenge-response confirmation enabled for destructive commands")
 	}
 
-	// Create AI client based on resolved provider
-	provider := cfg.ResolveAIProvider()
-	var converser ai.Converser
-	var err error
-
-	switch provider {
-	case "bedrock":
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		model := cfg.AI.Model
-		if model == "phi4-mini" || model == "phi4" {
-			model = "global.anthropic.claude-sonnet-4-6"
-		}
-		converser, err = ai.NewBedrockClient(ctx, cfg.AWS.Region, model, cfg.AI.Temperature)
-	case "local":
-		// Longer timeout: first run may need to pull the model
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		converser, err = ai.NewOllamaClient(ctx, cfg.AI.Model, cfg.AI.Temperature, cfg.AI.OllamaHost)
-	default:
-		err = fmt.Errorf("unknown AI provider: %s", provider)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to create %s AI client: %w", provider, err)
-	}
-
-	logger.Info().Str("provider", provider).Str("model", cfg.AI.Model).Msg("AI provider initialized")
-
-	// Build system prompt
-	hostname, err := os.Hostname()
-	if err != nil {
-		hostname = "unknown"
-	}
-
-	username := getUsername()
-	osName := runtime.GOOS
-	arch := runtime.GOARCH
-
-	systemPrompt := ai.BuildSystemPrompt(osName, arch, hostname, username)
-
-	// Create tool executor bridge
-	toolExecutor := func(ctx context.Context, toolName string, params map[string]any) (string, error) {
-		result, err := exec.Execute(ctx, toolName, params)
+	// Build the AI processor unless running in passthrough mode, which
+	// executes inbound messages directly and needs no local inference.
+	var processor *ai.Processor
+	if cfg.PassthroughMode() {
+		logger.Warn().Msg("Passthrough mode enabled — inbound messages run directly as shell commands (all guardrails remain active)")
+	} else {
+		provider := cfg.ResolveAIProvider()
+		converser, err := newConverser(provider, cfg)
 		if err != nil {
-			return "", err
+			return nil, fmt.Errorf("failed to create %s AI client: %w", provider, err)
+		}
+		logger.Info().Str("provider", provider).Str("model", cfg.AI.Model).Msg("AI provider initialized")
+
+		// Build system prompt
+		hostname, err := os.Hostname()
+		if err != nil {
+			hostname = "unknown"
+		}
+		systemPrompt := ai.BuildSystemPrompt(runtime.GOOS, runtime.GOARCH, hostname, getUsername())
+
+		// Bridge the processor's tool calls through the shared guarded path.
+		toolExecutor := func(ctx context.Context, toolName string, params map[string]any) (string, error) {
+			return executeToolGuarded(ctx, exec, challengeStore, toolName, params)
 		}
 
-		// When a command is blocked and challenge-response is enabled,
-		// store the pending challenge and ask the user to confirm.
-		if toolName == "execute_command" && challengeStore.Enabled() &&
-			result.ExitCode == 1 && strings.HasPrefix(result.Error, "Command blocked:") {
-			if cmd, ok := params["command"].(string); ok {
-				if spaceID, ok := ctx.Value(spaceIDKey).(string); ok {
-					reason := strings.TrimPrefix(result.Error, "Command blocked: ")
-					challengeStore.SetPending(spaceID, cmd, reason)
-					return fmt.Sprintf(
-						"Command blocked: %s\n\nThis command requires confirmation. "+
-							"Reply with the challenge response to proceed. "+
-							"The confirmation expires in 2 minutes.",
-						reason,
-					), nil
-				}
-			}
-		}
-
-		// Combine output and error into a single string for the AI
-		output := result.Output
-		if result.Error != "" {
-			output += "\nError: " + result.Error
-		}
-		return output, nil
+		processor = ai.NewProcessor(ai.ProcessorConfig{
+			Converser:     converser,
+			SystemPrompt:  systemPrompt,
+			Tools:         ai.AllTools(),
+			MaxTokens:     cfg.AI.MaxTokens,
+			MaxIterations: cfg.AI.MaxIterations,
+			ExecuteTool:   toolExecutor,
+		})
 	}
-
-	// Create AI processor
-	processor := ai.NewProcessor(ai.ProcessorConfig{
-		Converser:     converser,
-		SystemPrompt:  systemPrompt,
-		Tools:         ai.AllTools(),
-		MaxTokens:     cfg.AI.MaxTokens,
-		MaxIterations: cfg.AI.MaxIterations,
-		ExecuteTool:   toolExecutor,
-	})
 
 	// Create the appropriate connection mode
 	var mode connect.Mode
@@ -204,6 +156,67 @@ func New(cfg *config.Config) (*Agent, error) {
 	}
 
 	return agent, nil
+}
+
+// newConverser constructs the inference client for the resolved provider.
+func newConverser(provider string, cfg *config.Config) (ai.Converser, error) {
+	switch provider {
+	case config.ProviderInferd:
+		// Short probe timeout: the daemon is local and either up or not.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return ai.NewInferdClient(ctx, cfg.AI.InferdSocket, cfg.AI.Temperature)
+	case config.ProviderOpenAICompat:
+		return ai.NewOpenAICompatClient(cfg.AI.OpenAIBaseURL, cfg.AI.OpenAIAPIKey, cfg.AI.Model, cfg.AI.Temperature)
+	default:
+		return nil, fmt.Errorf("unknown AI provider: %s", provider)
+	}
+}
+
+// executeToolGuarded is the single command-gating path shared by the AI
+// processor loop and (indirectly) the passthrough handler. It runs a tool
+// through the executor — which applies the dangerous-command checker for
+// execute_command — and, when a command is blocked and challenge-response is
+// enabled, records a pending challenge keyed by the space and returns a
+// confirmation prompt instead of the raw block error. All security guardrails
+// are enforced here regardless of caller, so interpret and passthrough modes
+// gate identically.
+func executeToolGuarded(
+	ctx context.Context,
+	exec *executor.Executor,
+	challengeStore *security.ChallengeStore,
+	toolName string,
+	params map[string]any,
+) (string, error) {
+	result, err := exec.Execute(ctx, toolName, params)
+	if err != nil {
+		return "", err
+	}
+
+	// When a command is blocked and challenge-response is enabled, store the
+	// pending challenge and ask the user to confirm.
+	if toolName == "execute_command" && challengeStore.Enabled() &&
+		result.ExitCode == 1 && strings.HasPrefix(result.Error, "Command blocked:") {
+		if cmd, ok := params["command"].(string); ok {
+			if spaceID, ok := ctx.Value(spaceIDKey).(string); ok {
+				reason := strings.TrimPrefix(result.Error, "Command blocked: ")
+				challengeStore.SetPending(spaceID, cmd, reason)
+				return fmt.Sprintf(
+					"Command blocked: %s\n\nThis command requires confirmation. "+
+						"Reply with the challenge response to proceed. "+
+						"The confirmation expires in 2 minutes.",
+					reason,
+				), nil
+			}
+		}
+	}
+
+	// Combine output and error into a single string for the caller.
+	output := result.Output
+	if result.Error != "" {
+		output += "\nError: " + result.Error
+	}
+	return output, nil
 }
 
 // Run starts the agent and runs the main event loop
@@ -314,6 +327,15 @@ func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage)
 		}
 	}
 
+	// Passthrough mode: execute the message directly as a command with no
+	// local inference. Rate limiting, allowlist, and the challenge-response
+	// check above have already run; the command itself is gated by the same
+	// dangerous-command checker and challenge-response path as the AI loop.
+	if a.processor == nil {
+		a.handlePassthrough(ctx, msg, start)
+		return
+	}
+
 	// Get conversation history for this space
 	conversationKey := msg.SpaceID
 	history := a.conversations.GetHistory(conversationKey)
@@ -368,6 +390,52 @@ func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage)
 	// Send response back
 	if err := a.mode.SendMessage(ctx, msg.SpaceID, formattedResponse); err != nil {
 		a.logger.Error().Err(err).Msg("Failed to send message")
+	}
+}
+
+// handlePassthrough runs an inbound message directly as a shell command with
+// no local inference (Webex-as-SSH). It routes through the same guarded path
+// as the AI loop, so the dangerous-command checker and challenge-response
+// confirmation apply identically; a blocked command returns a confirmation
+// prompt rather than executing.
+func (a *Agent) handlePassthrough(ctx context.Context, msg connect.IncomingMessage, start time.Time) {
+	command := strings.TrimSpace(msg.Text)
+	if command == "" {
+		return
+	}
+
+	// Thread spaceID through context so a blocked command can register a
+	// pending challenge keyed by the space, exactly as in the AI loop.
+	execCtx := context.WithValue(ctx, spaceIDKey, msg.SpaceID)
+
+	response, err := executeToolGuarded(execCtx, a.exec, a.challengeStore, "execute_command",
+		map[string]any{"command": command})
+	var errMsg string
+	if err != nil {
+		a.logger.Error().Err(err).Msg("Passthrough command execution failed")
+		errMsg = err.Error()
+		response = "Sorry, an internal error occurred while executing your command."
+	} else if response == "" {
+		response = "Command executed successfully (no output)."
+	}
+
+	if a.audit != nil {
+		a.audit.Log(logging.AuditEntry{
+			Timestamp:  start,
+			Email:      msg.Email,
+			SpaceID:    msg.SpaceID,
+			RawMessage: fmt.Sprintf("[passthrough] %s", command),
+			ToolCalls:  []string{"execute_command"},
+			ToolInputs: []string{fmt.Sprintf("execute_command(command=%q)", command)},
+			Response:   response,
+			Duration:   time.Since(start),
+			Error:      errMsg,
+		})
+	}
+
+	formattedResponse := connect.FormatResponse(response)
+	if err := a.mode.SendMessage(ctx, msg.SpaceID, formattedResponse); err != nil {
+		a.logger.Error().Err(err).Msg("Failed to send passthrough response")
 	}
 }
 

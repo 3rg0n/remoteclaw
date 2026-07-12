@@ -18,15 +18,14 @@ var (
 
 // Config holds all RemoteClaw configuration settings
 type Config struct {
-	Mode      string            `mapstructure:"mode"`
-	Webex     WebexConfig       `mapstructure:"webex"`
-	WMCP      WMCPConfig        `mapstructure:"wmcp"`
-	AWS       AWSConfig         `mapstructure:"aws"`
-	AI        AIConfig          `mapstructure:"ai"`
-	Execution ExecutionConfig   `mapstructure:"execution"`
-	Security  SecurityConfig    `mapstructure:"security"`
-	Logging   LoggingConfig     `mapstructure:"logging"`
-	Health    HealthConfig      `mapstructure:"health"`
+	Mode      string          `mapstructure:"mode"`
+	Webex     WebexConfig     `mapstructure:"webex"`
+	WMCP      WMCPConfig      `mapstructure:"wmcp"`
+	AI        AIConfig        `mapstructure:"ai"`
+	Execution ExecutionConfig `mapstructure:"execution"`
+	Security  SecurityConfig  `mapstructure:"security"`
+	Logging   LoggingConfig   `mapstructure:"logging"`
+	Health    HealthConfig    `mapstructure:"health"`
 }
 
 // WebexConfig holds Webex-specific settings
@@ -41,19 +40,42 @@ type WMCPConfig struct {
 	Token    string `mapstructure:"token"`
 }
 
-// AWSConfig holds AWS-specific settings
-type AWSConfig struct {
-	Region string `mapstructure:"region"`
-}
+// AI provider and mode constants.
+const (
+	// ProviderInferd uses the local inferd inference daemon over a Unix
+	// socket / named pipe. This is the default local provider.
+	ProviderInferd = "inferd"
+	// ProviderOpenAICompat uses any OpenAI-compatible HTTP endpoint
+	// (Ollama's /v1, mantle/Bedrock-as-OpenAI, Anthropic's OpenAI API,
+	// vLLM, LM Studio, LocalAI, or real OpenAI).
+	ProviderOpenAICompat = "openai-compat"
+
+	// AIModeInterpret runs the local agentic AI loop: the model interprets
+	// the user's request and drives the tools. This is the default.
+	AIModeInterpret = "interpret"
+	// AIModePassthrough treats the chat like an SSH session: the inbound
+	// message is executed directly as a command with no local inference.
+	// All security guardrails still apply.
+	AIModePassthrough = "passthrough"
+)
 
 // AIConfig holds AI model settings
 type AIConfig struct {
-	Provider      string  `mapstructure:"provider"`     // "auto", "local", "bedrock"
-	Model         string  `mapstructure:"model"`
+	// Provider selects the inference backend: "" (default) or "inferd" for
+	// the local daemon, "openai-compat" for a remote OpenAI-compatible API.
+	// An empty value resolves to "openai-compat" when OpenAIBaseURL is set,
+	// otherwise "inferd". Ignored when Mode is "passthrough".
+	Provider string `mapstructure:"provider"`
+	// Mode selects request handling: "interpret" (default, local AI loop)
+	// or "passthrough" (execute the message directly, no inference).
+	Mode          string  `mapstructure:"mode"`
+	Model         string  `mapstructure:"model"` // openai-compat model name; ignored by inferd (daemon owns the model)
 	MaxTokens     int     `mapstructure:"max_tokens"`
 	MaxIterations int     `mapstructure:"max_iterations"`
-	Temperature   float64 `mapstructure:"temperature"`   // 0.0-1.0
-	OllamaHost    string  `mapstructure:"ollama_host"`   // e.g. "http://localhost:11434"
+	Temperature   float64 `mapstructure:"temperature"`     // 0.0-1.0
+	InferdSocket  string  `mapstructure:"inferd_socket"`   // optional socket/pipe path override (empty = platform default)
+	OpenAIBaseURL string  `mapstructure:"openai_base_url"` // e.g. "http://localhost:11434/v1"; setting this selects openai-compat
+	OpenAIAPIKey  string  `mapstructure:"openai_api_key"`  // bearer token for openai-compat (may be empty for local endpoints)
 }
 
 // ExecutionConfig holds command execution settings
@@ -125,9 +147,9 @@ func Load(path string) (*Config, error) {
 // applyDefaults sets default values in viper before unmarshaling
 func applyDefaults(v *viper.Viper) {
 	v.SetDefault("mode", "native")
-	v.SetDefault("aws.region", "us-west-2")
-	v.SetDefault("ai.provider", "auto")
-	v.SetDefault("ai.model", "phi4-mini")
+	v.SetDefault("ai.provider", "")
+	v.SetDefault("ai.mode", AIModeInterpret)
+	v.SetDefault("ai.model", "")
 	v.SetDefault("ai.max_tokens", 4096)
 	v.SetDefault("ai.max_iterations", 10)
 	v.SetDefault("ai.temperature", 0.2)
@@ -148,24 +170,35 @@ func (c *Config) expandEnvVars() {
 	c.Webex.BotToken = os.ExpandEnv(c.Webex.BotToken)
 	c.WMCP.Endpoint = os.ExpandEnv(c.WMCP.Endpoint)
 	c.WMCP.Token = os.ExpandEnv(c.WMCP.Token)
-	c.AI.OllamaHost = os.ExpandEnv(c.AI.OllamaHost)
+	c.AI.InferdSocket = os.ExpandEnv(c.AI.InferdSocket)
+	c.AI.OpenAIBaseURL = os.ExpandEnv(c.AI.OpenAIBaseURL)
+	c.AI.OpenAIAPIKey = os.ExpandEnv(c.AI.OpenAIAPIKey)
 	c.Execution.Shell = os.ExpandEnv(c.Execution.Shell)
 	c.Security.AuditLog = os.ExpandEnv(c.Security.AuditLog)
 	c.Security.Challenge = os.ExpandEnv(c.Security.Challenge)
 	c.Logging.File = os.ExpandEnv(c.Logging.File)
 }
 
-// ResolveAIProvider determines the AI provider based on config and environment
+// ResolveAIProvider determines the inference provider from config.
+// Explicit values ("inferd", "openai-compat") are returned as-is. An empty
+// provider resolves to "openai-compat" when an OpenAI base URL is set,
+// otherwise to the local "inferd" daemon.
 func (c *Config) ResolveAIProvider() string {
 	switch c.AI.Provider {
-	case "local", "bedrock":
+	case ProviderInferd, ProviderOpenAICompat:
 		return c.AI.Provider
-	default: // "auto" or empty
-		if os.Getenv("AWS_ACCESS_KEY_ID") != "" && os.Getenv("AWS_SECRET_ACCESS_KEY") != "" {
-			return "bedrock"
+	default: // empty
+		if c.AI.OpenAIBaseURL != "" {
+			return ProviderOpenAICompat
 		}
-		return "local"
+		return ProviderInferd
 	}
+}
+
+// PassthroughMode reports whether the agent should execute inbound messages
+// directly as commands without local inference.
+func (c *Config) PassthroughMode() bool {
+	return c.AI.Mode == AIModePassthrough
 }
 
 // Validate checks that required fields are populated based on the configured mode
@@ -191,14 +224,20 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// AWS region is only required when using Bedrock
-	if c.ResolveAIProvider() == "bedrock" {
-		if c.AWS.Region == "" {
-			return fmt.Errorf("aws.region is required when using bedrock provider")
+	// Validate AI mode
+	if c.AI.Mode != "" && c.AI.Mode != AIModeInterpret && c.AI.Mode != AIModePassthrough {
+		return fmt.Errorf("invalid ai.mode: %q (must be %q or %q)", c.AI.Mode, AIModeInterpret, AIModePassthrough)
+	}
+
+	// Passthrough mode needs no inference backend; skip provider validation.
+	if !c.PassthroughMode() {
+		// Validate explicit provider values
+		if c.AI.Provider != "" && c.AI.Provider != ProviderInferd && c.AI.Provider != ProviderOpenAICompat {
+			return fmt.Errorf("invalid ai.provider: %q (must be %q or %q)", c.AI.Provider, ProviderInferd, ProviderOpenAICompat)
 		}
-		// If model is still the local default, override to Bedrock default
-		if c.AI.Model == "phi4-mini" || c.AI.Model == "phi4" {
-			c.AI.Model = "global.anthropic.claude-sonnet-4-6"
+		// openai-compat requires a base URL
+		if c.ResolveAIProvider() == ProviderOpenAICompat && c.AI.OpenAIBaseURL == "" {
+			return fmt.Errorf("ai.openai_base_url is required when using the openai-compat provider")
 		}
 	}
 

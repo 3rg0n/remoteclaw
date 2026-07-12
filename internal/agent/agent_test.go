@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	"github.com/3rg0n/remoteclaw/internal/connect"
 	"github.com/3rg0n/remoteclaw/internal/executor"
 	"github.com/3rg0n/remoteclaw/internal/logging"
+	"github.com/3rg0n/remoteclaw/internal/security"
 )
 
 // MockConverser is a mock implementation of ai.Converser for testing
@@ -42,6 +44,7 @@ type MockMode struct {
 	connected bool
 	handler   connect.MessageHandler
 	closed    bool
+	sentText  string // last message text sent, for assertions
 }
 
 func (m *MockMode) Connect(ctx context.Context) error {
@@ -54,6 +57,7 @@ func (m *MockMode) OnMessage(handler connect.MessageHandler) {
 }
 
 func (m *MockMode) SendMessage(ctx context.Context, spaceID string, text string) error {
+	m.sentText = text
 	return nil
 }
 
@@ -70,23 +74,21 @@ func TestNew(t *testing.T) {
 	}
 
 	// Note: This test verifies the structure compiles.
-	// Full New() testing requires AWS credentials or mocking of NewBedrockClient.
-	// For integration testing, ensure AWS_REGION and valid credentials are available.
-	//
-	// In production code, use dependency injection (NewWithDeps) to pass mock dependencies.
-	// Example mock config that would work with proper setup:
+	// Full New() testing requires a reachable inferd daemon or an
+	// openai-compat endpoint; the message-handler tests below inject a
+	// MockConverser to exercise behavior without a live backend.
 	_ = &config.Config{
 		Mode: "native",
 		Webex: config.WebexConfig{
 			BotToken:      "test-token",
 			AllowedEmails: []string{},
 		},
-		AWS: config.AWSConfig{
-			Region: "us-west-2",
-		},
 		AI: config.AIConfig{
-			Model:        "test-model",
-			MaxTokens:    4096,
+			Provider:      config.ProviderOpenAICompat,
+			Mode:          config.AIModeInterpret,
+			Model:         "test-model",
+			OpenAIBaseURL: "http://localhost:8080/openai/v1",
+			MaxTokens:     4096,
 			MaxIterations: 10,
 		},
 		Execution: config.ExecutionConfig{
@@ -423,6 +425,99 @@ func TestMessageHandlerError(t *testing.T) {
 	agent.messageHandler(ctx, msg)
 	if agent.lastMsg.IsZero() {
 		t.Error("expected lastMsg to be set even on error")
+	}
+}
+
+// newPassthroughAgent builds an agent in passthrough mode (processor == nil)
+// with a real executor whose dangerous-command checker is enabled, mirroring
+// production wiring.
+func newPassthroughAgent(t *testing.T, challenge string) (*Agent, *MockMode) {
+	t.Helper()
+	if err := logging.Setup("info", "json", ""); err != nil {
+		t.Fatalf("failed to setup logging: %v", err)
+	}
+	exec := executor.New(30*time.Second, 5*time.Minute, "")
+	exec.SetDangerousChecker(security.NewDangerousChecker())
+	mockMode := &MockMode{}
+	agent := &Agent{
+		logger:         logging.Get(),
+		processor:      nil, // passthrough: no inference
+		exec:           exec,
+		mode:           mockMode,
+		conversations:  NewConversationManager(20),
+		challengeStore: security.NewChallengeStore(challenge),
+		cfg: &config.Config{
+			AI:      config.AIConfig{Mode: config.AIModePassthrough},
+			Logging: config.LoggingConfig{Level: "info"},
+		},
+		startTime: time.Now(),
+	}
+	return agent, mockMode
+}
+
+// TestPassthroughExecutesCommand verifies that in passthrough mode a benign
+// message is run directly as a command and its output is returned.
+func TestPassthroughExecutesCommand(t *testing.T) {
+	agent, mockMode := newPassthroughAgent(t, "")
+	defer agent.challengeStore.Close()
+
+	// A portable, harmless command. "echo" exists on both sh and PowerShell.
+	msg := connect.IncomingMessage{
+		SpaceID: "space-1",
+		Email:   "user@example.com",
+		Text:    "echo passthrough_ok",
+	}
+	agent.messageHandler(context.Background(), msg)
+
+	if agent.lastMsg.IsZero() {
+		t.Error("expected lastMsg to be set")
+	}
+	if !strings.Contains(mockMode.sentText, "passthrough_ok") {
+		t.Errorf("expected command output in response, got %q", mockMode.sentText)
+	}
+}
+
+// TestPassthroughBlocksDangerousCommand verifies that the dangerous-command
+// guardrail still gates passthrough execution. With challenge-response
+// disabled, a blocked command must NOT execute and the response must surface
+// the block.
+func TestPassthroughBlocksDangerousCommand(t *testing.T) {
+	agent, mockMode := newPassthroughAgent(t, "")
+	defer agent.challengeStore.Close()
+
+	msg := connect.IncomingMessage{
+		SpaceID: "space-1",
+		Email:   "user@example.com",
+		Text:    "rm -rf /",
+	}
+	agent.messageHandler(context.Background(), msg)
+
+	if !strings.Contains(mockMode.sentText, "blocked") && !strings.Contains(mockMode.sentText, "Blocked") {
+		t.Errorf("expected dangerous command to be blocked, got %q", mockMode.sentText)
+	}
+}
+
+// TestPassthroughDangerousCommandPromptsChallenge verifies that when
+// challenge-response is enabled, a blocked passthrough command registers a
+// pending challenge and returns the confirmation prompt rather than executing.
+func TestPassthroughDangerousCommandPromptsChallenge(t *testing.T) {
+	// A valid AES-GCM challenge ciphertext so the store is enabled.
+	ciphertext, err := security.EncryptChallenge("test-passphrase")
+	if err != nil {
+		t.Fatalf("failed to build challenge: %v", err)
+	}
+	agent, mockMode := newPassthroughAgent(t, ciphertext)
+	defer agent.challengeStore.Close()
+
+	msg := connect.IncomingMessage{
+		SpaceID: "space-1",
+		Email:   "user@example.com",
+		Text:    "rm -rf /",
+	}
+	agent.messageHandler(context.Background(), msg)
+
+	if !strings.Contains(mockMode.sentText, "requires confirmation") {
+		t.Errorf("expected challenge confirmation prompt, got %q", mockMode.sentText)
 	}
 }
 
