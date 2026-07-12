@@ -1,0 +1,91 @@
+internal/ai/inferd_dial_unix.go
+  s_fb340f953812c6::t_08a096ae4f8374 1-20
+internal/agent/agent.go
+  s_fb340f953812c6::t_8f2572e5c727a2 161-221
+  s_fb340f953812c6::t_9bbd8396173874 330-338
+  s_fb340f953812c6::t_a9a8c67552f7aa 101-110,112,114-115,117,119,121-123,126-133
+  s_fb340f953812c6::t_69fbdfc984dd36 396-441
+go.mod
+  s_fb340f953812c6::t_261a953e277356 6,11,24
+  s_fb340f953812c6::t_d8aa63fe45373a 22
+  s_fb340f953812c6::t_396ebe0102723f 36-39
+internal/agent/agent_test.go
+  s_fb340f953812c6::t_4e3f5e5653517f 47,60
+  s_fb340f953812c6::t_d0fb4b844ba331 431-523
+  s_fb340f953812c6::t_94c46233aa07f3 77-79,87-91
+  s_fb340f953812c6::t_6f605f4d669e9d 11,20
+docs/adr/0002-passthrough-mode.md
+  s_fb340f953812c6::t_f587d664427c5a 1-72
+internal/ai/inferd.go
+  s_fb340f953812c6::t_4c77b814eb2d37 46-47
+  s_fb340f953812c6::t_0a627cbea050b3 1-8,10-11,13-30,33-37,85-94,97-169,171-212,215-300
+  s_fb340f953812c6::t_aebfc58826336c 95-96
+  s_fb340f953812c6::t_5e419674f5d23c 12
+  s_fb340f953812c6::t_7b584c0a6b9022 170,213-214
+  s_fb340f953812c6::t_3a1ff280476bed 31-32,38-45,48-84
+  s_77c5e323ad5400::t_1dbf87983def09 9
+docs/adr/0001-inference-via-inferd-and-openai-compat.md
+  s_fb340f953812c6::t_38457d508dfefb 1-71
+internal/ai/inferd_integration_test.go
+  s_fb340f953812c6::t_ec5243988785bf 1-60
+README.md
+  s_fb340f953812c6::t_549db96d758fff 197-228
+  s_fb340f953812c6::t_e0455b4a81eb66 134,149,151-154
+  s_77c5e323ad5400::t_d2fe3dee908f1d 312-315,318-320
+internal/config/config.go
+  s_fb340f953812c6::t_d38b1bfcddbcac 227-236,238-240
+  s_fb340f953812c6::t_f91d1f11ed6e44 21-28,43-60,64-72,77-78
+  s_fb340f953812c6::t_b00f8d173f75fa 75-76
+  s_fb340f953812c6::t_31633682878f2c 150-152
+  s_fb340f953812c6::t_27f90f07403b33 173-175,182-185,188,190-192,194,198-201
+  s_fb340f953812c6::t_fe849e2e869309 202-203
+config/config.example.yaml
+  s_fb340f953812c6::t_66c7ad9173c460 23-37,40-50
+internal/ai/openai.go
+  s_fb340f953812c6::t_8c3be6fec7d7b7 1-121,124-204,207-222
+  s_fb340f953812c6::t_5843c289e86f4f 122-123
+  s_fb340f953812c6::t_d52dc503d75854 205-206
+internal/config/config_test.go
+  s_fb340f953812c6::t_9b52792beecc77 25-26,55-56,120-122,127-130,222-264,282-303,306,310-311,317-318,326,383,437-453,526,533,537,540,547,549-575,595-597,600-602,605-607,610,612,615-618
+internal/ai/openai_integration_test.go
+  s_fb340f953812c6::t_dbadfb1addb6b6 1-104
+CHANGELOG.md
+  s_fb340f953812c6::t_3676ffd00ca483 39-43
+  s_fb340f953812c6::t_29a03e41dde158 50-54
+  s_fb340f953812c6::t_ed8346fc89f1b8 11-20
+docs/adr/README.md
+  s_fb340f953812c6::t_0db76aa296bba6 1-14
+CLAUDE.md
+  s_fb340f953812c6::t_1d264234353aa8 53-60
+  s_fb340f953812c6::t_38a5313958d0ad 7,9,11,13-18,20,22,24,26-28,30,32-40,42-44,46-52,61-84,86,88
+  s_fb340f953812c6::t_7dd442aba40412 29
+  s_fb340f953812c6::t_9ac44b1885431d 41,45
+internal/ai/inferd_dial_windows.go
+  s_fb340f953812c6::t_49ea70dc890622 1-14
+go.sum
+  s_fb340f953812c6::t_f90fd60d431771 1-2,15-16,44-45,74-83
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "6b854e6f93dd193e6eb2751cafc7416729382179",
+  "prompts": {},
+  "sessions": {
+    "s_77c5e323ad5400": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "2db1b9bd-30ff-4002-9382-6b26ac9a840b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    }
+  }
+}
