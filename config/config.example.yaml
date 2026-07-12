@@ -18,24 +18,36 @@ wmcp:
   endpoint: "https://wmcp.example.com"
   token: "${WMCP_TOKEN}"
 
-# AWS Bedrock (only required when provider is "bedrock")
-aws:
-  region: "us-west-2"
-  # credentials via default provider chain (env, IAM role, ~/.aws/credentials)
-
 # AI
 ai:
-  # Provider: "auto" (default), "local" (Ollama), or "bedrock" (AWS)
-  # "auto" uses Bedrock if AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY are set, otherwise local
-  provider: "auto"
-  # Model name — for local: "phi4-mini" (default, 3.8B) or "phi4" (14B)
-  #             for bedrock: "global.anthropic.claude-sonnet-4-6"
-  model: "phi4-mini"
-  temperature: 0.2
+  # provider: "" (default) or "inferd" → local inferd daemon;
+  #           "openai-compat" → remote OpenAI-compatible HTTP API.
+  # Empty resolves to openai-compat when openai_base_url is set, else inferd.
+  provider: ""
+
+  # mode: "interpret" (default) → local AI loop interprets requests and drives tools.
+  #       "passthrough"          → treat chat like SSH: run the message directly as a
+  #                                command with NO local inference. All guardrails still apply.
+  mode: "interpret"
+
+  # model: openai-compat model name (e.g. "gpt-4o", "llama3.1"). Ignored by inferd —
+  # the daemon owns the warm model.
+  model: ""
+
+  temperature: 0.2       # capped at 0.3 for safety consistency
   max_tokens: 4096
   max_iterations: 10
-  # Ollama host (default: http://localhost:11434)
-  # ollama_host: "http://localhost:11434"
+
+  # inferd (local): optional socket/pipe path override. Empty = platform default
+  # (unix: $XDG_RUNTIME_DIR/inferd/inferd.sock; windows: \\.\pipe\inferd).
+  inferd_socket: ""
+
+  # openai-compat (remote): setting openai_base_url selects the openai-compat provider.
+  #   Ollama:   http://localhost:11434/v1
+  #   mantle:   https://mantle.internal/v1   (Bedrock-as-OpenAI)
+  #   OpenAI:   https://api.openai.com/v1
+  openai_base_url: ""
+  openai_api_key: "${OPENAI_API_KEY}"   # may be empty for local endpoints
 
 # Security
 security:

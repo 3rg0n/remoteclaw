@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Local inference via the `inferd` daemon (`github.com/3rg0n/inferd/clients/go`)
+  over a Unix socket / Windows named pipe — new default local provider
+  ([ADR 0001](docs/adr/0001-inference-via-inferd-and-openai-compat.md))
+- Remote inference via any OpenAI-compatible endpoint (`openai-compat` provider,
+  official `github.com/openai/openai-go`): Ollama `/v1`, mantle/Bedrock-as-OpenAI,
+  vLLM, LM Studio, LocalAI, OpenAI — configured with `ai.openai_base_url`
+- Passthrough mode (`ai.mode: passthrough`): execute inbound messages directly
+  as commands with no local inference, for a remote AI driving the machine;
+  all guardrails remain active
+  ([ADR 0002](docs/adr/0002-passthrough-mode.md))
 - MAESTRO threat model report (`THREAT_MODEL.md`) covering all 7 layers
 - Prompt injection defense: XML delimiter wrapping for user input and tool output
 - Tool output sanitization and truncation (32KB limit) before LLM feedback
@@ -26,12 +36,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - linux/arm64 and darwin/amd64 build targets in Makefile and CI
 
 ### Changed
+- Inference architecture: replaced the embedded Ollama + AWS Bedrock SDKs and
+  the `auto`/`local`/`bedrock` provider scheme with `inferd` (local) and
+  `openai-compat` (remote); provider resolves to `openai-compat` when
+  `ai.openai_base_url` is set, otherwise `inferd`
+  ([ADR 0001](docs/adr/0001-inference-via-inferd-and-openai-compat.md))
 - GitHub Actions pinned to full commit SHAs (all 6 actions)
-- Ollama SDK upgraded from v0.18.2 to v0.20.2
 - AI temperature capped at 0.3 in config validation for security consistency
 - Conversation history size cap reduced from 512KB to 128KB
 - Bedrock deserialization failures now logged at WARN instead of silently ignored
 - System prompt hardened with mandatory safety constraints section
+
+### Removed
+- Embedded Ollama SDK (`github.com/ollama/ollama`) and AWS Bedrock runtime SDK
+  (`github.com/aws/aws-sdk-go-v2/*`) dependencies, the `aws:` config block, and
+  the `ai.ollama_host` setting (superseded by inferd + openai-compat)
 
 ### Fixed
 - TOCTOU race in challenge-response: lock acquired before scrypt verification

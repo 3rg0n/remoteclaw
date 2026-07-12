@@ -21,9 +21,9 @@ webex:
   allowed_emails:
     - "admin@example.com"
     - "user@example.com"
-aws:
-  region: "us-east-1"
 ai:
+  provider: "openai-compat"
+  openai_base_url: "http://localhost:11434/v1"
   model: "custom-model"
   max_tokens: 8192
   max_iterations: 20
@@ -52,8 +52,8 @@ health:
 	assert.Equal(t, "admin@example.com", cfg.Webex.AllowedEmails[0])
 	assert.Equal(t, "user@example.com", cfg.Webex.AllowedEmails[1])
 
-	assert.Equal(t, "us-east-1", cfg.AWS.Region)
-
+	assert.Equal(t, "openai-compat", cfg.AI.Provider)
+	assert.Equal(t, "http://localhost:11434/v1", cfg.AI.OpenAIBaseURL)
 	assert.Equal(t, "custom-model", cfg.AI.Model)
 	assert.Equal(t, 8192, cfg.AI.MaxTokens)
 	assert.Equal(t, 20, cfg.AI.MaxIterations)
@@ -86,8 +86,6 @@ webex:
 wmcp:
   endpoint: "${WMCP_ENDPOINT}"
   token: "${WMCP_TOKEN}"
-aws:
-  region: "us-west-2"
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -102,10 +100,6 @@ aws:
 }
 
 func TestLoadConfigWithDefaults(t *testing.T) {
-	// Clear AWS creds so auto-detection resolves to "local"
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -114,8 +108,6 @@ func TestLoadConfigWithDefaults(t *testing.T) {
 mode: native
 webex:
   bot_token: "test-token"
-aws:
-  region: "us-west-2"
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -125,11 +117,16 @@ aws:
 	require.NoError(t, err)
 
 	// Check defaults are applied
-	assert.Equal(t, "auto", cfg.AI.Provider)
-	assert.Equal(t, "phi4-mini", cfg.AI.Model)
+	assert.Equal(t, "", cfg.AI.Provider)
+	assert.Equal(t, AIModeInterpret, cfg.AI.Mode)
+	assert.Equal(t, "", cfg.AI.Model)
 	assert.Equal(t, 4096, cfg.AI.MaxTokens)
 	assert.Equal(t, 10, cfg.AI.MaxIterations)
 	assert.InDelta(t, 0.2, cfg.AI.Temperature, 0.001)
+
+	// Empty provider with no base URL resolves to inferd
+	assert.Equal(t, ProviderInferd, cfg.ResolveAIProvider())
+	assert.False(t, cfg.PassthroughMode())
 
 	assert.Equal(t, 30*time.Second, cfg.Execution.DefaultTimeout)
 	assert.Equal(t, 5*time.Minute, cfg.Execution.MaxTimeout)
@@ -150,8 +147,6 @@ func TestValidateNativeModeRequiresWebexToken(t *testing.T) {
 mode: native
 webex:
   bot_token: ""
-aws:
-  region: "us-west-2"
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -173,8 +168,6 @@ mode: wmcp
 wmcp:
   endpoint: ""
   token: "test-token"
-aws:
-  region: "us-west-2"
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -196,8 +189,6 @@ mode: wmcp
 wmcp:
   endpoint: "https://wmcp.example.com"
   token: ""
-aws:
-  region: "us-west-2"
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -217,8 +208,6 @@ func TestValidateInvalidMode(t *testing.T) {
 mode: invalid
 webex:
   bot_token: "test-token"
-aws:
-  region: "us-west-2"
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -230,7 +219,49 @@ aws:
 	assert.Contains(t, err.Error(), "invalid mode")
 }
 
-func TestValidateRequiresAWSRegionForBedrock(t *testing.T) {
+func TestValidateOpenAICompatRequiresBaseURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+mode: native
+webex:
+  bot_token: "test-token"
+ai:
+  provider: "openai-compat"
+  openai_base_url: ""
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	cfg, err := Load(configPath)
+	assert.Error(t, err)
+	assert.Nil(t, cfg)
+	assert.Contains(t, err.Error(), "ai.openai_base_url is required when using the openai-compat provider")
+}
+
+func TestValidateInferdProviderNeedsNoBaseURL(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+mode: native
+webex:
+  bot_token: "test-token"
+ai:
+  provider: "inferd"
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	cfg, err := Load(configPath)
+	require.NoError(t, err)
+	assert.Equal(t, ProviderInferd, cfg.ResolveAIProvider())
+}
+
+func TestValidateInvalidProvider(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -240,8 +271,6 @@ webex:
   bot_token: "test-token"
 ai:
   provider: "bedrock"
-aws:
-  region: ""
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -250,10 +279,10 @@ aws:
 	cfg, err := Load(configPath)
 	assert.Error(t, err)
 	assert.Nil(t, cfg)
-	assert.Contains(t, err.Error(), "aws.region is required when using bedrock provider")
+	assert.Contains(t, err.Error(), "invalid ai.provider")
 }
 
-func TestValidateAWSRegionNotRequiredForLocal(t *testing.T) {
+func TestValidateInvalidAIMode(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -262,9 +291,31 @@ mode: native
 webex:
   bot_token: "test-token"
 ai:
-  provider: "local"
-aws:
-  region: ""
+  mode: "sideways"
+`
+
+	err := os.WriteFile(configPath, []byte(configContent), 0600)
+	require.NoError(t, err)
+
+	cfg, err := Load(configPath)
+	assert.Error(t, err)
+	assert.Nil(t, cfg)
+	assert.Contains(t, err.Error(), "invalid ai.mode")
+}
+
+func TestValidatePassthroughSkipsProviderValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	// Passthrough with openai-compat but no base URL is still valid:
+	// passthrough needs no inference backend.
+	configContent := `
+mode: native
+webex:
+  bot_token: "test-token"
+ai:
+  mode: "passthrough"
+  provider: "openai-compat"
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -272,7 +323,7 @@ aws:
 
 	cfg, err := Load(configPath)
 	require.NoError(t, err)
-	assert.Equal(t, "local", cfg.ResolveAIProvider())
+	assert.True(t, cfg.PassthroughMode())
 }
 
 func TestLoadNonExistentFile(t *testing.T) {
@@ -293,8 +344,6 @@ func TestLoadWithPartialEnvVarExpansion(t *testing.T) {
 mode: native
 webex:
   bot_token: "prefix-${BOT_TOKEN}-suffix"
-aws:
-  region: "us-west-2"
 `
 
 	err := os.WriteFile(configPath, []byte(configContent), 0600)
@@ -307,10 +356,6 @@ aws:
 }
 
 func TestLoadConfigWMCPMode(t *testing.T) {
-	// Clear AWS creds so auto-detection resolves to "local"
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.yaml")
 
@@ -319,8 +364,6 @@ mode: wmcp
 wmcp:
   endpoint: "https://wmcp.example.com"
   token: "wmcp-secret-token"
-aws:
-  region: "eu-west-1"
 logging:
   level: "warn"
 `
@@ -334,11 +377,10 @@ logging:
 	assert.Equal(t, "wmcp", cfg.Mode)
 	assert.Equal(t, "https://wmcp.example.com", cfg.WMCP.Endpoint)
 	assert.Equal(t, "wmcp-secret-token", cfg.WMCP.Token)
-	assert.Equal(t, "eu-west-1", cfg.AWS.Region)
 	assert.Equal(t, "warn", cfg.Logging.Level)
 
 	// Verify other defaults still apply
-	assert.Equal(t, "phi4-mini", cfg.AI.Model)
+	assert.Equal(t, AIModeInterpret, cfg.AI.Mode)
 	assert.True(t, cfg.Health.Enabled)
 }
 
@@ -350,8 +392,6 @@ func TestTimeoutParsing(t *testing.T) {
 mode: native
 webex:
   bot_token: "test-token"
-aws:
-  region: "us-west-2"
 execution:
   default_timeout: "2m30s"
   max_timeout: "1h"
@@ -394,6 +434,23 @@ func TestExpandEnvVarsMethod(t *testing.T) {
 	assert.Equal(t, "/bin/bash", cfg.Execution.Shell)
 }
 
+func TestExpandEnvVarsAIFields(t *testing.T) {
+	cfg := &Config{}
+	cfg.AI.InferdSocket = "${INFERD_SOCK}"
+	cfg.AI.OpenAIBaseURL = "${OPENAI_BASE}"
+	cfg.AI.OpenAIAPIKey = "${OPENAI_KEY}"
+
+	t.Setenv("INFERD_SOCK", "/tmp/inferd/inferd.sock")
+	t.Setenv("OPENAI_BASE", "http://localhost:8080/openai/v1")
+	t.Setenv("OPENAI_KEY", "sk-test")
+
+	cfg.expandEnvVars()
+
+	assert.Equal(t, "/tmp/inferd/inferd.sock", cfg.AI.InferdSocket)
+	assert.Equal(t, "http://localhost:8080/openai/v1", cfg.AI.OpenAIBaseURL)
+	assert.Equal(t, "sk-test", cfg.AI.OpenAIAPIKey)
+}
+
 func TestValidateStructMethod(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -408,9 +465,6 @@ func TestValidateStructMethod(t *testing.T) {
 				Webex: WebexConfig{
 					BotToken: "token",
 				},
-				AWS: AWSConfig{
-					Region: "us-west-2",
-				},
 			},
 			wantErr: false,
 		},
@@ -422,9 +476,6 @@ func TestValidateStructMethod(t *testing.T) {
 					Endpoint: "https://example.com",
 					Token:    "token",
 				},
-				AWS: AWSConfig{
-					Region: "us-west-2",
-				},
 			},
 			wantErr: false,
 		},
@@ -432,9 +483,6 @@ func TestValidateStructMethod(t *testing.T) {
 			name: "invalid mode",
 			cfg: &Config{
 				Mode: "unknown",
-				AWS: AWSConfig{
-					Region: "us-west-2",
-				},
 			},
 			wantErr: true,
 			errMsg:  "invalid mode",
@@ -445,9 +493,6 @@ func TestValidateStructMethod(t *testing.T) {
 				Mode: "native",
 				Webex: WebexConfig{
 					BotToken: "",
-				},
-				AWS: AWSConfig{
-					Region: "us-west-2",
 				},
 			},
 			wantErr: true,
@@ -461,9 +506,6 @@ func TestValidateStructMethod(t *testing.T) {
 					Endpoint: "",
 					Token:    "token",
 				},
-				AWS: AWSConfig{
-					Region: "us-west-2",
-				},
 			},
 			wantErr: true,
 			errMsg:  "wmcp.endpoint is required in wmcp mode",
@@ -476,15 +518,39 @@ func TestValidateStructMethod(t *testing.T) {
 					Endpoint: "https://example.com",
 					Token:    "",
 				},
-				AWS: AWSConfig{
-					Region: "us-west-2",
-				},
 			},
 			wantErr: true,
 			errMsg:  "wmcp.token is required in wmcp mode",
 		},
 		{
-			name: "missing aws region with bedrock provider",
+			name: "openai-compat missing base url",
+			cfg: &Config{
+				Mode: "native",
+				Webex: WebexConfig{
+					BotToken: "token",
+				},
+				AI: AIConfig{
+					Provider: ProviderOpenAICompat,
+				},
+			},
+			wantErr: true,
+			errMsg:  "ai.openai_base_url is required",
+		},
+		{
+			name: "inferd provider needs no base url",
+			cfg: &Config{
+				Mode: "native",
+				Webex: WebexConfig{
+					BotToken: "token",
+				},
+				AI: AIConfig{
+					Provider: ProviderInferd,
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "invalid provider",
 			cfg: &Config{
 				Mode: "native",
 				Webex: WebexConfig{
@@ -493,25 +559,20 @@ func TestValidateStructMethod(t *testing.T) {
 				AI: AIConfig{
 					Provider: "bedrock",
 				},
-				AWS: AWSConfig{
-					Region: "",
-				},
 			},
 			wantErr: true,
-			errMsg:  "aws.region is required when using bedrock provider",
+			errMsg:  "invalid ai.provider",
 		},
 		{
-			name: "missing aws region with local provider is ok",
+			name: "passthrough skips provider validation",
 			cfg: &Config{
 				Mode: "native",
 				Webex: WebexConfig{
 					BotToken: "token",
 				},
 				AI: AIConfig{
-					Provider: "local",
-				},
-				AWS: AWSConfig{
-					Region: "",
+					Mode:     AIModePassthrough,
+					Provider: ProviderOpenAICompat,
 				},
 			},
 			wantErr: false,
@@ -531,94 +592,28 @@ func TestValidateStructMethod(t *testing.T) {
 	}
 }
 
-func TestResolveAIProvider_ExplicitLocal(t *testing.T) {
-	cfg := &Config{AI: AIConfig{Provider: "local"}}
-	assert.Equal(t, "local", cfg.ResolveAIProvider())
+func TestResolveAIProvider_ExplicitInferd(t *testing.T) {
+	cfg := &Config{AI: AIConfig{Provider: ProviderInferd}}
+	assert.Equal(t, ProviderInferd, cfg.ResolveAIProvider())
 }
 
-func TestResolveAIProvider_ExplicitBedrock(t *testing.T) {
-	cfg := &Config{AI: AIConfig{Provider: "bedrock"}}
-	assert.Equal(t, "bedrock", cfg.ResolveAIProvider())
+func TestResolveAIProvider_ExplicitOpenAICompat(t *testing.T) {
+	cfg := &Config{AI: AIConfig{Provider: ProviderOpenAICompat, OpenAIBaseURL: "http://x/v1"}}
+	assert.Equal(t, ProviderOpenAICompat, cfg.ResolveAIProvider())
 }
 
-func TestResolveAIProvider_AutoWithAWSCreds(t *testing.T) {
-	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "secretkey")
-
-	cfg := &Config{AI: AIConfig{Provider: "auto"}}
-	assert.Equal(t, "bedrock", cfg.ResolveAIProvider())
+func TestResolveAIProvider_EmptyWithBaseURL(t *testing.T) {
+	cfg := &Config{AI: AIConfig{Provider: "", OpenAIBaseURL: "http://localhost:11434/v1"}}
+	assert.Equal(t, ProviderOpenAICompat, cfg.ResolveAIProvider())
 }
 
-func TestResolveAIProvider_AutoWithoutAWSCreds(t *testing.T) {
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-
-	cfg := &Config{AI: AIConfig{Provider: "auto"}}
-	assert.Equal(t, "local", cfg.ResolveAIProvider())
-}
-
-func TestResolveAIProvider_AutoWithPartialAWSCreds(t *testing.T) {
-	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAEXAMPLE")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-
-	cfg := &Config{AI: AIConfig{Provider: "auto"}}
-	assert.Equal(t, "local", cfg.ResolveAIProvider())
-}
-
-func TestResolveAIProvider_EmptyDefaultsToLocal(t *testing.T) {
-	t.Setenv("AWS_ACCESS_KEY_ID", "")
-	t.Setenv("AWS_SECRET_ACCESS_KEY", "")
-
+func TestResolveAIProvider_EmptyDefaultsToInferd(t *testing.T) {
 	cfg := &Config{AI: AIConfig{Provider: ""}}
-	assert.Equal(t, "local", cfg.ResolveAIProvider())
+	assert.Equal(t, ProviderInferd, cfg.ResolveAIProvider())
 }
 
-func TestValidateBedrockOverridesLocalModel(t *testing.T) {
-	cfg := &Config{
-		Mode: "native",
-		Webex: WebexConfig{
-			BotToken: "token",
-		},
-		AI: AIConfig{
-			Provider: "bedrock",
-			Model:    "phi4-mini",
-		},
-		AWS: AWSConfig{
-			Region: "us-west-2",
-		},
-	}
-
-	err := cfg.Validate()
-	require.NoError(t, err)
-	assert.Equal(t, "global.anthropic.claude-sonnet-4-6", cfg.AI.Model)
-}
-
-func TestValidateBedrockKeepsExplicitModel(t *testing.T) {
-	cfg := &Config{
-		Mode: "native",
-		Webex: WebexConfig{
-			BotToken: "token",
-		},
-		AI: AIConfig{
-			Provider: "bedrock",
-			Model:    "us.anthropic.claude-haiku-3-20240307-v1:0",
-		},
-		AWS: AWSConfig{
-			Region: "us-west-2",
-		},
-	}
-
-	err := cfg.Validate()
-	require.NoError(t, err)
-	assert.Equal(t, "us.anthropic.claude-haiku-3-20240307-v1:0", cfg.AI.Model)
-}
-
-func TestExpandEnvVarsOllamaHost(t *testing.T) {
-	cfg := &Config{}
-	cfg.AI.OllamaHost = "${OLLAMA_HOST_VAR}"
-
-	t.Setenv("OLLAMA_HOST_VAR", "http://myhost:11434")
-	cfg.expandEnvVars()
-
-	assert.Equal(t, "http://myhost:11434", cfg.AI.OllamaHost)
+func TestPassthroughMode(t *testing.T) {
+	assert.True(t, (&Config{AI: AIConfig{Mode: AIModePassthrough}}).PassthroughMode())
+	assert.False(t, (&Config{AI: AIConfig{Mode: AIModeInterpret}}).PassthroughMode())
+	assert.False(t, (&Config{AI: AIConfig{Mode: ""}}).PassthroughMode())
 }

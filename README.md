@@ -131,8 +131,7 @@ Create a `.env` file in the working directory:
 ```bash
 WEBEX_BOT_TOKEN=YourBotAccessTokenHere
 # CHALLENGE=<value>                 # Optional: challenge for destructive command confirmation
-# AWS_ACCESS_KEY_ID=...             # Optional: enables Bedrock AI provider
-# AWS_SECRET_ACCESS_KEY=...
+# OPENAI_API_KEY=...                # Optional: bearer token for an openai-compat endpoint
 ```
 
 Edit `config.yaml` to set your allowed emails:
@@ -147,12 +146,12 @@ webex:
     - "teammate@company.com"
 ```
 
-### 3. Start the AI backend (if using local/Ollama)
+### 3. Start the AI backend
 
-```bash
-ollama serve
-# RemoteClaw auto-pulls the model on first run
-```
+- **inferd (default):** install and start the [inferd](https://github.com/3rg0n/inferd)
+  daemon; it loads and holds the model warm. RemoteClaw connects to its socket.
+- **openai-compat:** set `ai.openai_base_url` (e.g. `http://localhost:11434/v1`
+  for a running Ollama) — no local daemon needed beyond that endpoint.
 
 ### 4. Run
 
@@ -195,11 +194,38 @@ The WMCP client handles authentication, heartbeats (every 30s), and automatic re
 
 ## AI Providers
 
-| Provider | Config | Model | Requirements |
-|----------|--------|-------|-------------|
-| Local (Ollama) | `provider: "local"` | `phi4-mini` (3.8B, default) or `phi4` (14B) | Ollama running locally |
-| AWS Bedrock | `provider: "bedrock"` | `global.anthropic.claude-sonnet-4-6` | AWS credentials |
-| Auto (default) | `provider: "auto"` | — | Uses Bedrock if `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` are set, otherwise local |
+RemoteClaw talks to one of two inference transports, both behind the same
+interface:
+
+| Provider | Config | Where the model lives | Requirements |
+|----------|--------|-----------------------|--------------|
+| `inferd` (local, default) | `provider: "inferd"` (or empty) | The [inferd](https://github.com/3rg0n/inferd) daemon owns the warm model | inferd installed and running (Unix socket / named pipe) |
+| `openai-compat` (remote) | `provider: "openai-compat"` + `openai_base_url` | Any OpenAI-compatible HTTP endpoint | A reachable base URL |
+
+**Provider resolution:** an explicit `provider` wins; if left empty, RemoteClaw
+uses `openai-compat` when `openai_base_url` is set, otherwise `inferd`.
+
+`openai-compat` covers the whole OpenAI-compatible ecosystem — point
+`openai_base_url` at any of:
+
+- **Ollama:** `http://localhost:11434/v1`
+- **mantle / Bedrock-as-OpenAI:** `https://mantle.internal/v1`
+- **OpenAI / Anthropic OpenAI API:** the vendor base URL + `openai_api_key`
+- **vLLM, LM Studio, LocalAI:** their local `/v1` endpoint
+
+> Bedrock is no longer a built-in provider: reach it through an OpenAI-compatible
+> gateway (mantle) via `openai-compat`, so RemoteClaw itself needs no AWS
+> credentials. See [ADR 0001](docs/adr/0001-inference-via-inferd-and-openai-compat.md).
+
+### Interpret vs. passthrough (`ai.mode`)
+
+- **`interpret` (default):** the local AI interprets each message and drives the
+  tools — the original behavior.
+- **`passthrough`:** the inbound message is executed directly as a command with
+  no local inference (Webex-as-SSH), for when a *remote* AI is the brain. All
+  guardrails — dangerous-command checker, challenge-response, rate limit, strict
+  allowlist, audit logging — remain fully active. See
+  [ADR 0002](docs/adr/0002-passthrough-mode.md).
 
 ## Security
 
@@ -282,16 +308,16 @@ wmcp:
   endpoint: ""                      # WMCP WebSocket endpoint
   token: "${WMCP_TOKEN}"            # WMCP authentication token
 
-aws:
-  region: "us-west-2"               # AWS region for Bedrock
-
 ai:
-  provider: "auto"                  # "auto", "local", or "bedrock"
-  model: "phi4-mini"                # Model name (auto-overridden for bedrock)
-  temperature: 0.2                  # 0.0–1.0
+  provider: ""                      # "" (default→inferd) | "inferd" | "openai-compat"
+  mode: "interpret"                 # "interpret" (AI drives) | "passthrough" (run message as command)
+  model: ""                         # openai-compat model name; ignored by inferd
+  temperature: 0.2                  # 0.0–1.0 (capped at 0.3)
   max_tokens: 4096                  # Max response tokens
   max_iterations: 10                # Max tool-call loops per request
-  # ollama_host: "http://localhost:11434"
+  inferd_socket: ""                 # optional socket/pipe path override (empty = platform default)
+  openai_base_url: ""               # set → selects openai-compat (e.g. http://localhost:11434/v1)
+  openai_api_key: "${OPENAI_API_KEY}"  # bearer token for openai-compat (may be empty locally)
 
 security:
   dangerous_commands: true          # Enable dangerous command blocking
