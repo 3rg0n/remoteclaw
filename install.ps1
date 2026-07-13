@@ -5,7 +5,6 @@ $ErrorActionPreference = "Stop"
 
 $Repo        = "3rg0n/remoteclaw"
 $ReleaseUrl  = "https://github.com/$Repo/releases/latest/download"
-$OllamaModel = "phi4-mini"
 
 $InstallDir  = "C:\ProgramData\remoteclaw"
 $BinPath     = "$InstallDir\remoteclaw.exe"
@@ -138,109 +137,6 @@ function Add-ToPath {
     }
 }
 
-# --- Install Ollama --------------------------------------------------------
-
-function Install-Ollama {
-    if (Get-Command ollama -ErrorAction SilentlyContinue) {
-        Write-Ok "Ollama is already installed."
-        return $true
-    }
-
-    Write-Info "Ollama not found. Installing…"
-
-    # Try winget first
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        try {
-            winget install Ollama.Ollama --accept-source-agreements --accept-package-agreements
-            # Refresh PATH for current session
-            $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-            if (Get-Command ollama -ErrorAction SilentlyContinue) {
-                Write-Ok "Ollama installed via winget."
-                return $true
-            }
-        }
-        catch {
-            Write-Warn "winget install failed, trying direct download…"
-        }
-    }
-
-    # Fallback: direct download
-    try {
-        $ollamaUrl = "https://ollama.com/download/OllamaSetup.exe"
-        $ollamaInstaller = Join-Path $env:TEMP "OllamaSetup.exe"
-        Invoke-WebRequest -Uri $ollamaUrl -OutFile $ollamaInstaller -UseBasicParsing
-        Start-Process -FilePath $ollamaInstaller -ArgumentList "/S" -Wait
-        Remove-Item $ollamaInstaller -Force -ErrorAction SilentlyContinue
-        # Refresh PATH
-        $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-        if (Get-Command ollama -ErrorAction SilentlyContinue) {
-            Write-Ok "Ollama installed."
-            return $true
-        }
-    }
-    catch {
-        # Ignore
-    }
-
-    Write-Warn "Ollama installation failed. You can install it manually from https://ollama.com"
-    Write-Warn "or configure AWS Bedrock as the AI provider instead."
-    return $false
-}
-
-# --- Start Ollama ----------------------------------------------------------
-
-function Start-OllamaService {
-    # Check if already responding
-    try {
-        $null = Invoke-WebRequest -Uri "http://localhost:11434/api/version" -UseBasicParsing -TimeoutSec 2
-        Write-Ok "Ollama is already running."
-        return $true
-    }
-    catch { }
-
-    Write-Info "Starting Ollama…"
-
-    # Try starting the Ollama service
-    $svc = Get-Service -Name "ollama" -ErrorAction SilentlyContinue
-    if ($svc) {
-        Start-Service -Name "ollama" -ErrorAction SilentlyContinue
-    }
-    else {
-        # Launch ollama serve in the background
-        Start-Process ollama -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue
-    }
-
-    # Wait for it to be ready
-    for ($i = 0; $i -lt 15; $i++) {
-        Start-Sleep -Seconds 1
-        try {
-            $null = Invoke-WebRequest -Uri "http://localhost:11434/api/version" -UseBasicParsing -TimeoutSec 2
-            Write-Ok "Ollama is running."
-            return $true
-        }
-        catch { }
-    }
-
-    Write-Warn "Ollama did not start in time. You may need to start it manually."
-    return $false
-}
-
-# --- Pull model ------------------------------------------------------------
-
-function Pull-OllamaModel {
-    if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
-        return
-    }
-
-    Write-Info "Pulling model $OllamaModel… (this may take a few minutes on first run)"
-    try {
-        & ollama pull $OllamaModel
-        Write-Ok "Model $OllamaModel is ready."
-    }
-    catch {
-        Write-Warn "Failed to pull model. You can run 'ollama pull $OllamaModel' later."
-    }
-}
 
 # --- Interactive prompts ---------------------------------------------------
 
@@ -255,32 +151,51 @@ function Get-UserConfig {
         Write-Err "Bot token is required. Get one at https://developer.webex.com/my-apps"
     }
 
-    # Challenge secret (optional)
-    $passphrase = Read-Host "  Challenge secret for destructive-command confirmation (optional)"
+    # Allowed emails (optional)
+    $script:AllowedEmails = Read-Host "  Restrict to allowlisted emails, comma-separated (optional)"
+
+    # Challenge confirmation (optional, default Y)
+    $enableChallenge = Read-Host "  Enable destructive-command challenge? [Y/n]"
     $script:ChallengeEncrypted = ""
 
-    if ($passphrase) {
-        Write-Info "Setting up challenge…"
-        try {
-            $script:ChallengeEncrypted = & $BinPath encrypt-challenge $passphrase 2>$null
-            if ($script:ChallengeEncrypted) {
-                Write-Ok "Challenge configured."
+    if ($enableChallenge -notmatch '^[nN]' -and $enableChallenge -ne "") {
+        $passphrase = Read-Host "  Challenge passphrase (will be encrypted)" -AsSecureString
+        $passphraseText = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToCoTaskMemUnicode($passphrase))
+
+        if ($passphraseText) {
+            Write-Info "Encrypting challenge…"
+            try {
+                $script:ChallengeEncrypted = & $BinPath encrypt-challenge $passphraseText 2>$null
+                if ($script:ChallengeEncrypted) {
+                    Write-Ok "Challenge configured."
+                }
+                else {
+                    throw "empty output"
+                }
             }
-            else {
-                throw "empty output"
+            catch {
+                Write-Err "Challenge encryption failed. Proceeding without challenge."
+                $script:ChallengeEncrypted = ""
             }
         }
-        catch {
-            Write-Warn "Binary encrypt not available. Storing challenge — configure before production use."
-            $script:ChallengeEncrypted = $passphrase
-        }
+    } else {
+        Write-Info "Destructive-command challenge disabled."
     }
 
-    # Allowed emails (optional)
-    $script:AllowedEmails = Read-Host "  Allowed emails, comma-separated (optional)"
+    # Store secrets location (pass not typical on Windows; default to .env with note)
+    Write-Info "Secrets will be stored in plaintext .env file. For production, consider using an external secret store."
+    $script:UsePass = $false
+
+    # Lockdown mode (default Y)
+    $enableLockdown = Read-Host "  Lock down config & secrets? [Y/n]"
+    if ($enableLockdown -notmatch '^[nN]' -and $enableLockdown -ne "") {
+        $script:LockdownEnabled = $true
+    } else {
+        $script:LockdownEnabled = $false
+    }
 }
 
-# --- Create directories ----------------------------------------------------
+# --- Create directories and apply lockdown ---------------------------------
 
 function New-Directories {
     Write-Info "Creating directories…"
@@ -288,6 +203,40 @@ function New-Directories {
         New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
     }
     Write-Ok "Created $InstallDir and $LogDir"
+
+    if ($script:LockdownEnabled) {
+        Write-Info "Applying lockdown ACLs to config directory…"
+
+        # The service runs as LocalService (see Install-RemoteClawService) and MUST
+        # read its own config at startup, so LocalService is granted READ — not
+        # denied. Inheritance is disabled and the broad "Users" group gets no
+        # entry, so ordinary accounts on the box cannot read config/secrets.
+        # Modifying settings requires Administrators = local admin. The agent's
+        # OWN tools are denied by the in-process guard; making config unreadable
+        # to the agent's own process via any command needs the privilege-separated
+        # executor tracked in ADR 0004.
+        $acl = New-Object System.Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)  # disable inheritance, drop inherited ACEs
+
+        $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
+        )
+        $acl.AddAccessRule($adminRule)
+
+        $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "NT AUTHORITY\SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
+        )
+        $acl.AddAccessRule($systemRule)
+
+        # Grant the service account READ so the service can start.
+        $svcRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "NT AUTHORITY\LocalService", "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow"
+        )
+        $acl.AddAccessRule($svcRule)
+
+        Set-Acl -Path $InstallDir -AclObject $acl
+        Write-Ok "Config directory restricted: Administrators + service account only."
+    }
 }
 
 # --- Generate .env ---------------------------------------------------------
@@ -302,31 +251,38 @@ function New-EnvFile {
 
     $lines -join "`r`n" | Set-Content -Path $EnvPath -Encoding UTF8 -Force
 
-    # Lock down permissions: disable inheritance, grant only current user
-    $acl = Get-Acl $EnvPath
-    $acl.SetAccessRuleProtection($true, $false)
-    # Remove all existing rules
-    $acl.Access | ForEach-Object { $acl.RemoveAccessRule($_) } | Out-Null
-    # Grant current user full control
-    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        $identity, "FullControl", "Allow"
-    )
-    $acl.SetAccessRule($rule)
-    # Also grant SYSTEM access (needed for service)
-    $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-        "NT AUTHORITY\SYSTEM", "FullControl", "Allow"
-    )
-    $acl.SetAccessRule($systemRule)
-    Set-Acl $EnvPath $acl
+    if ($script:LockdownEnabled) {
+        # Administrators + SYSTEM full control; the LocalService service account
+        # gets READ so the service can load its token at startup. Inheritance is
+        # disabled and no entry is granted to Users, so ordinary accounts cannot
+        # read the token. The agent's own tools are denied by the in-process guard.
+        $acl = New-Object System.Security.AccessControl.FileSecurity
+        $acl.SetAccessRuleProtection($true, $false)
 
-    Write-Ok "Created $EnvPath (restricted ACL)"
+        $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "Administrators", "FullControl", "Allow"
+        )
+        $acl.AddAccessRule($adminRule)
 
-    # Also set CHALLENGE as a system environment variable for persistence
-    if ($script:ChallengeEncrypted) {
-        [Environment]::SetEnvironmentVariable("CHALLENGE", $script:ChallengeEncrypted, "Machine")
-        Write-Info "Set CHALLENGE as system environment variable."
+        $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "NT AUTHORITY\SYSTEM", "FullControl", "Allow"
+        )
+        $acl.AddAccessRule($systemRule)
+
+        $svcRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            "NT AUTHORITY\LocalService", "Read", "Allow"
+        )
+        $acl.AddAccessRule($svcRule)
+
+        Set-Acl $EnvPath $acl
+        Write-Ok "Created $EnvPath (Administrators + service-account ACL)"
+    } else {
+        Write-Ok "Created $EnvPath"
     }
+
+    # Note: CHALLENGE is intentionally NOT persisted to a machine environment
+    # variable — the challenge ciphertext lives in .env (read by the service).
+    # The passphrase is never stored (see ADR 0003).
 }
 
 # --- Generate config.yaml --------------------------------------------------
@@ -353,6 +309,8 @@ function New-ConfigFile {
         '  challenge: ""'
     }
 
+    $lockdownValue = if ($script:LockdownEnabled) { "true" } else { "false" }
+
     $configContent = @"
 mode: native
 
@@ -361,17 +319,22 @@ webex:
   allowed_emails:$emailsYaml
 
 ai:
-  provider: "auto"
-  model: "$OllamaModel"
+  provider: ""
+  mode: "interpret"
+  model: ""
   temperature: 0.2
   max_tokens: 4096
   max_iterations: 10
+  inferd_socket: ""
+  openai_base_url: ""
+  openai_api_key: "`${OPENAI_API_KEY}"
 
 security:
   dangerous_commands: true
   audit_log: "$LogDir\audit"
   rate_limit_per_min: 10
 $challengeLine
+  lockdown: $lockdownValue
 
 execution:
   default_timeout: "30s"
@@ -397,7 +360,11 @@ health:
 function Install-RemoteClawService {
     Write-Info "Installing RemoteClaw as a system service…"
     try {
-        & $BinPath install --config $ConfigPath
+        $installCmd = @($BinPath, "install", "--config", $ConfigPath)
+        if ($script:LockdownEnabled) {
+            $installCmd += @("--user", "NT AUTHORITY\LocalService")
+        }
+        & $installCmd[0] $installCmd[1..($installCmd.Length-1)]
         Write-Ok "Service installed."
         return $true
     }
@@ -455,13 +422,6 @@ function Main {
     Install-Binary
     Add-ToPath
     New-Directories
-
-    # Ollama (best-effort)
-    $ollamaOk = Install-Ollama
-    if ($ollamaOk) {
-        Start-OllamaService | Out-Null
-        Pull-OllamaModel
-    }
 
     Get-UserConfig
     New-EnvFile

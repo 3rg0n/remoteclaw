@@ -6,7 +6,6 @@ set -euo pipefail
 
 REPO="3rg0n/remoteclaw"
 RELEASE_URL="https://github.com/${REPO}/releases/latest/download"
-OLLAMA_MODEL="phi4-mini"
 
 # --- Colors -----------------------------------------------------------
 RED='\033[0;31m'
@@ -149,106 +148,16 @@ download_binary() {
     ok "Installed remoteclaw → ${BIN_PATH}"
 }
 
-# --- Install Ollama -----------------------------------------------------
-install_ollama() {
-    if command -v ollama >/dev/null 2>&1; then
-        ok "Ollama is already installed."
-        return 0
-    fi
-
-    info "Ollama not found. Installing…"
-    if ! curl -fsSL https://ollama.com/install.sh | sh; then
-        warn "Ollama installation failed. You can install it manually later"
-        warn "or configure AWS Bedrock as the AI provider instead."
-        return 1
-    fi
-    ok "Ollama installed."
-    return 0
-}
-
-# --- Start Ollama -------------------------------------------------------
-start_ollama() {
-    # Check if Ollama is already responding
-    if curl -sf http://localhost:11434/api/version >/dev/null 2>&1; then
-        ok "Ollama is already running."
-        return 0
-    fi
-
-    info "Starting Ollama…"
-    if [ "$OS" = "linux" ]; then
-        if command -v systemctl >/dev/null 2>&1; then
-            $SUDO systemctl start ollama 2>/dev/null || true
-        fi
-    else
-        # macOS: try brew services, then fall back to manual launch
-        if command -v brew >/dev/null 2>&1; then
-            brew services start ollama 2>/dev/null || true
-        else
-            nohup ollama serve >/dev/null 2>&1 &
-        fi
-    fi
-
-    # Wait for Ollama to be ready (up to 15 seconds)
-    local tries=0
-    while [ $tries -lt 15 ]; do
-        if curl -sf http://localhost:11434/api/version >/dev/null 2>&1; then
-            ok "Ollama is running."
-            return 0
-        fi
-        sleep 1
-        tries=$((tries + 1))
-    done
-
-    warn "Ollama did not start in time. You may need to start it manually."
-    return 1
-}
-
-# --- Pull model ---------------------------------------------------------
-pull_model() {
-    if ! command -v ollama >/dev/null 2>&1; then
-        return 1
-    fi
-
-    info "Pulling model ${OLLAMA_MODEL}… (this may take a few minutes on first run)"
-    if ollama pull "$OLLAMA_MODEL"; then
-        ok "Model ${OLLAMA_MODEL} is ready."
-    else
-        warn "Failed to pull model. You can run 'ollama pull ${OLLAMA_MODEL}' later."
-    fi
-}
-
-# --- Challenge setup -----------------------------------------------------
+# --- Encrypt challenge passphrase -----------------------------------------------
 encrypt_challenge() {
-    # Prepare the challenge value for storage
     local passphrase="$1"
-    local sentinel="REMOTECLAW_CHALLENGE_OK"
-
-    # Generate salt and derive key
-    local salt
-    salt=$(openssl rand -hex 16)
-
-    # Derive key
-    local key
-    key=$(echo -n "$passphrase" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:${salt}" -binary | xxd -p -c 64)
-
-    # Generate nonce
-    local nonce
-    nonce=$(openssl rand -hex 12)
-
-    # Encrypt
-    local encrypted
-    encrypted=$(echo -n "$sentinel" | openssl enc -aes-256-gcm \
-        -K "$key" -iv "$nonce" -nosalt -a 2>/dev/null || echo "")
-
-    if [ -z "$encrypted" ]; then
-        # Fallback: store directly — RemoteClaw will handle on first run.
-        warn "openssl not available for challenge setup. RemoteClaw will configure on first run."
-        echo "$passphrase"
-        return
+    # Call the binary to encrypt the challenge using AES-256-GCM
+    if "$BIN_PATH" encrypt-challenge "$passphrase" 2>/dev/null; then
+        return 0
+    else
+        # Binary failed or not yet installed
+        return 1
     fi
-
-    # Combine and encode
-    echo "${salt}${nonce}${encrypted}" | base64
 }
 
 # --- Interactive prompts -------------------------------------------------
@@ -267,66 +176,138 @@ prompt_config() {
         err "Bot token is required. Get one at https://developer.webex.com/my-apps"
     done
 
-    # Challenge secret (optional)
-    printf "  Challenge secret for destructive-command confirmation (optional): "
-    read -r CHALLENGE_PASSPHRASE
-    CHALLENGE_PASSPHRASE="${CHALLENGE_PASSPHRASE:-}"
+    # Allowed emails (optional)
+    printf "  Restrict to allowlisted emails, comma-separated (optional): "
+    read -r ALLOWED_EMAILS_RAW
+    ALLOWED_EMAILS_RAW="${ALLOWED_EMAILS_RAW:-}"
 
-    # If challenge provided, set it up using the binary
+    # Challenge confirmation (optional, default Y)
+    printf "  Enable destructive-command challenge? [Y/n] "
+    read -r ENABLE_CHALLENGE
+    ENABLE_CHALLENGE="${ENABLE_CHALLENGE:-y}"
+
     CHALLENGE_ENCRYPTED=""
-    if [ -n "$CHALLENGE_PASSPHRASE" ]; then
-        info "Setting up challenge…"
-        # Use the installed binary to set up the challenge
-        if CHALLENGE_ENCRYPTED=$("$BIN_PATH" encrypt-challenge "$CHALLENGE_PASSPHRASE" 2>/dev/null); then
-            ok "Challenge configured."
-        else
-            # Binary doesn't have encrypt-challenge yet — store raw for now
-            warn "Binary setup not available. Storing challenge — configure before production use."
-            CHALLENGE_ENCRYPTED="$CHALLENGE_PASSPHRASE"
+    if [[ ! "$ENABLE_CHALLENGE" =~ ^[nN] ]]; then
+        printf "  Challenge passphrase (will be encrypted): "
+        read -rs CHALLENGE_PASSPHRASE
+        echo ""
+        if [ -n "$CHALLENGE_PASSPHRASE" ]; then
+            info "Encrypting challenge…"
+            if CHALLENGE_ENCRYPTED=$(encrypt_challenge "$CHALLENGE_PASSPHRASE"); then
+                ok "Challenge configured."
+            else
+                err "Challenge encryption failed. Proceeding without challenge."
+                CHALLENGE_ENCRYPTED=""
+            fi
         fi
     fi
 
-    # Allowed emails (optional)
-    printf "  Allowed emails, comma-separated (optional): "
-    read -r ALLOWED_EMAILS_RAW
-    ALLOWED_EMAILS_RAW="${ALLOWED_EMAILS_RAW:-}"
+    # Store secrets with pass or .env (default Y if pass available, else N)
+    USE_PASS=false
+    if command -v pass >/dev/null 2>&1 && [ -d "${HOME}/.password-store" ]; then
+        printf "  Store secrets in pass? [Y/n] "
+        read -r USE_PASS_ANSWER
+        USE_PASS_ANSWER="${USE_PASS_ANSWER:-y}"
+        if [[ ! "$USE_PASS_ANSWER" =~ ^[nN] ]]; then
+            USE_PASS=true
+        fi
+    fi
+
+    if [ "$USE_PASS" = false ]; then
+        warn "Secrets will be stored in plaintext .env file. For production, consider using the pass secret store."
+    fi
+
+    # Lockdown mode (default Y)
+    printf "  Lock down config & secrets? [Y/n] "
+    read -r ENABLE_LOCKDOWN
+    ENABLE_LOCKDOWN="${ENABLE_LOCKDOWN:-y}"
+    if [[ ! "$ENABLE_LOCKDOWN" =~ ^[nN] ]]; then
+        LOCKDOWN_ENABLED=true
+    else
+        LOCKDOWN_ENABLED=false
+    fi
 }
 
-# --- Create directories --------------------------------------------------
+# --- Create directories and apply lockdown ------------------------------------
 create_dirs() {
     info "Creating directories…"
     $SUDO mkdir -p "$CONF_DIR"
     $SUDO mkdir -p "$LOG_DIR"
     ok "Created ${CONF_DIR} and ${LOG_DIR}"
+
+    if [ "$LOCKDOWN_ENABLED" = true ] && [ "$OS" = "linux" ]; then
+        info "Applying lockdown (dedicated low-privilege service user)…"
+
+        # Create a dedicated low-privilege service account. Running as this user
+        # (instead of root) is the meaningful privilege reduction: it limits what
+        # the agent can touch on the host and addresses the "runs as root" risk.
+        $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin remoteclaw 2>/dev/null || true
+        ok "Service user 'remoteclaw' ensured."
+
+        # Config/secrets are owned by the service user and readable ONLY by it
+        # (0700 dir, 0600 files). The service must read its own config at startup,
+        # so it cannot be root-exclusive — but every OTHER account on the box
+        # (including other non-root users) is denied. The agent's OWN tools are
+        # denied by the in-process lockdown guard (defense-in-depth). Making reads
+        # unreadable to the agent's own uid via any command requires the
+        # privilege-separated executor tracked in ADR 0004.
+        $SUDO chown -R remoteclaw:remoteclaw "$CONF_DIR"
+        $SUDO chmod 700 "$CONF_DIR"
+        ok "Config directory restricted to the service user."
+
+        # Audit log directory: writable by the service user.
+        $SUDO mkdir -p "$LOG_DIR"
+        $SUDO chown -R remoteclaw:remoteclaw "$LOG_DIR"
+        $SUDO chmod 750 "$LOG_DIR"
+        ok "Audit log directory writable by service user."
+    elif [ "$LOCKDOWN_ENABLED" = true ]; then
+        warn "macOS: dedicated-service-user lockdown requires manual setup; using in-process lockdown only."
+    fi
 }
 
 # --- Generate .env --------------------------------------------------------
 generate_env() {
-    info "Generating ${ENV_PATH}…"
-
-    local env_content="WEBEX_BOT_TOKEN=${BOT_TOKEN}"
-    if [ -n "$CHALLENGE_ENCRYPTED" ]; then
-        env_content="${env_content}
+    if [ "$USE_PASS" = true ]; then
+        info "Storing secrets in the current user's pass store…"
+        # NOTE: pass is per-user and GPG-session bound. This stores secrets in
+        # the INSTALLING user's store. When lockdown runs the service as the
+        # dedicated 'remoteclaw' account, that account has its own (empty) store
+        # and no access to this one — so the service would fall back to .env.
+        # For a service-account + pass setup, the store must belong to the
+        # service user (out of scope for this installer; see README/ADR 0003).
+        printf '%s' "$BOT_TOKEN" | pass insert -m -f remoteclaw/webex_bot_token >/dev/null 2>&1 || \
+            err "Failed to store bot token in pass"
+        ok "Secrets stored in pass for user '$(id -un)'."
+        if [ "$LOCKDOWN_ENABLED" = true ] && [ "$OS" = "linux" ]; then
+            warn "Lockdown runs the service as 'remoteclaw', which cannot read this user's pass store."
+            warn "Either provision the store under the service account, or use the .env option instead."
+        fi
+        # The challenge ciphertext is non-sensitive; keep it in .env for the service.
+        if [ -n "$CHALLENGE_ENCRYPTED" ]; then
+            echo "CHALLENGE=${CHALLENGE_ENCRYPTED}" | $SUDO tee "$ENV_PATH" >/dev/null
+            $SUDO chmod 600 "$ENV_PATH"
+            [ "$OS" = "linux" ] && $SUDO chown remoteclaw:remoteclaw "$ENV_PATH" 2>/dev/null || true
+        fi
+    else
+        info "Generating ${ENV_PATH}…"
+        local env_content="WEBEX_BOT_TOKEN=${BOT_TOKEN}"
+        if [ -n "$CHALLENGE_ENCRYPTED" ]; then
+            env_content="${env_content}
 CHALLENGE=${CHALLENGE_ENCRYPTED}"
-    fi
-
-    echo "$env_content" | $SUDO tee "$ENV_PATH" >/dev/null
-    $SUDO chmod 600 "$ENV_PATH"
-    ok "Created ${ENV_PATH} (mode 600)"
-
-    # Also export to shell profile for persistence
-    if [ -n "$CHALLENGE_ENCRYPTED" ] && [ "$OS" = "darwin" ]; then
-        local zshenv="$HOME/.zshenv"
-        if ! grep -q "CHALLENGE=" "$zshenv" 2>/dev/null; then
-            echo "export CHALLENGE=\"${CHALLENGE_ENCRYPTED}\"" >> "$zshenv"
-            info "Added CHALLENGE to ${zshenv}"
         fi
-    elif [ -n "$CHALLENGE_ENCRYPTED" ] && [ "$OS" = "linux" ]; then
-        local profile="$HOME/.profile"
-        if ! grep -q "CHALLENGE=" "$profile" 2>/dev/null; then
-            echo "export CHALLENGE=\"${CHALLENGE_ENCRYPTED}\"" >> "$profile"
-            info "Added CHALLENGE to ${profile}"
+
+        echo "$env_content" | $SUDO tee "$ENV_PATH" >/dev/null
+        if [ "$LOCKDOWN_ENABLED" = true ]; then
+            $SUDO chmod 600 "$ENV_PATH"
+            # Owned by the service user so the service can read it; 0600 denies
+            # every other account. The agent's own tools are denied by the guard.
+            if [ "$OS" = "linux" ]; then
+                $SUDO chown remoteclaw:remoteclaw "$ENV_PATH" 2>/dev/null || true
+            fi
+        else
+            $SUDO chmod 644 "$ENV_PATH"
         fi
+        ok "Created ${ENV_PATH}"
     fi
 }
 
@@ -359,6 +340,11 @@ generate_config() {
         challenge_line='  challenge: ""'
     fi
 
+    local lockdown_value="true"
+    if [ "$LOCKDOWN_ENABLED" = false ]; then
+        lockdown_value="false"
+    fi
+
     $SUDO tee "$CONFIG_PATH" >/dev/null <<YAML
 mode: native
 
@@ -367,17 +353,22 @@ webex:
   allowed_emails:${emails_yaml}
 
 ai:
-  provider: "auto"
-  model: "${OLLAMA_MODEL}"
+  provider: ""
+  mode: "interpret"
+  model: ""
   temperature: 0.2
   max_tokens: 4096
   max_iterations: 10
+  inferd_socket: ""
+  openai_base_url: ""
+  openai_api_key: "\${OPENAI_API_KEY}"
 
 security:
   dangerous_commands: true
   audit_log: "${LOG_DIR}/audit"
   rate_limit_per_min: 10
 ${challenge_line}
+  lockdown: ${lockdown_value}
 
 execution:
   default_timeout: "30s"
@@ -395,12 +386,27 @@ health:
 YAML
 
     ok "Created ${CONFIG_PATH}"
+    if [ "$LOCKDOWN_ENABLED" = true ]; then
+        $SUDO chmod 600 "$CONFIG_PATH"
+        # Owned by the service user so the service reads it at startup; 0600
+        # denies all other accounts. (The config dir chmod 700 is applied in
+        # create_dirs; this re-asserts file ownership after the tee wrote it.)
+        if [ "$OS" = "linux" ]; then
+            $SUDO chown remoteclaw:remoteclaw "$CONFIG_PATH" 2>/dev/null || true
+        fi
+    fi
 }
 
 # --- Install service ------------------------------------------------------
 install_service() {
     info "Installing RemoteClaw as a system service…"
-    if $SUDO "$BIN_PATH" install --config "$CONFIG_PATH"; then
+    local install_cmd="$SUDO \"$BIN_PATH\" install --config \"$CONFIG_PATH\""
+
+    if [ "$LOCKDOWN_ENABLED" = true ] && [ "$OS" = "linux" ]; then
+        install_cmd="$install_cmd --user remoteclaw"
+    fi
+
+    if eval "$install_cmd"; then
         ok "Service installed."
     else
         warn "Service installation failed. You can run 'remoteclaw install --config ${CONFIG_PATH}' manually."
@@ -455,14 +461,6 @@ main() {
     check_sudo
     check_existing
     download_binary
-
-    # Ollama (best-effort)
-    ollama_ok=true
-    install_ollama || ollama_ok=false
-    if [ "$ollama_ok" = true ]; then
-        start_ollama || true
-        pull_model || true
-    fi
 
     prompt_config
     create_dirs

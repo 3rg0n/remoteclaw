@@ -17,10 +17,11 @@ type ToolResult struct {
 
 // Executor dispatches tool calls to handlers
 type Executor struct {
-	defaultTimeout    time.Duration
-	maxTimeout        time.Duration
-	shell             string
-	dangerousChecker  *security.DangerousChecker
+	defaultTimeout   time.Duration
+	maxTimeout       time.Duration
+	shell            string
+	dangerousChecker *security.DangerousChecker
+	guard            *Guard
 }
 
 // New creates a new Executor with the given configuration.
@@ -40,6 +41,13 @@ func (e *Executor) SetDangerousChecker(dc *security.DangerousChecker) {
 	e.dangerousChecker = dc
 }
 
+// SetGuard enables the config/secret lockdown guard. When set and enabled, the
+// file tools hard-deny protected paths and execute_command best-effort denies
+// secret-reading commands.
+func (e *Executor) SetGuard(g *Guard) {
+	e.guard = g
+}
+
 // Execute dispatches a tool call to the appropriate handler.
 // toolName specifies which tool to call, and params are the tool arguments.
 // Returns a ToolResult with the tool output or error information.
@@ -57,6 +65,27 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 		}
 	}
 
+	// Lockdown guard: best-effort deny of secret-reading commands. The
+	// authoritative protection is the OS file permission (config/secrets not
+	// readable by the service account); this is defense-in-depth. See guard.go.
+	if toolName == "execute_command" && e.guard.Enabled() {
+		if cmd, ok := params["command"].(string); ok {
+			if blocked, reason := e.guard.IsSecretReadCommand(cmd); blocked {
+				return &ToolResult{
+					Error:    fmt.Sprintf("Command blocked by lockdown: %s (config/secret access requires local administration)", reason),
+					ExitCode: 1,
+				}, nil
+			}
+		}
+	}
+
+	// Lockdown guard: hard-deny file tools on protected paths.
+	if e.guard.Enabled() {
+		if blocked, res := e.guardFileTool(toolName, params); blocked {
+			return res, nil
+		}
+	}
+
 	return e.dispatch(ctx, toolName, params)
 }
 
@@ -71,6 +100,26 @@ func (e *Executor) ForceExecuteCommand(ctx context.Context, command string) (*To
 	// challenge was issued. Log but allow if the checker still blocks — the user
 	// already confirmed via challenge-response.
 	return e.executeCommand(ctx, map[string]any{"command": command})
+}
+
+// guardFileTool hard-denies read_file, write_file, and list_dir when their
+// target path falls within a protected config/secret location. Returns
+// (true, result) when the call must be blocked.
+func (e *Executor) guardFileTool(toolName string, params map[string]any) (bool, *ToolResult) {
+	switch toolName {
+	case "read_file", "write_file", "list_dir":
+		path, ok := params["path"].(string)
+		if !ok || path == "" {
+			return false, nil
+		}
+		if e.guard.IsProtectedPath(path) {
+			return true, &ToolResult{
+				Error:    fmt.Sprintf("access blocked by lockdown: %s is a protected config/secret path (requires local administration)", path),
+				ExitCode: 1,
+			}
+		}
+	}
+	return false, nil
 }
 
 // dispatch routes a tool call to the appropriate handler.

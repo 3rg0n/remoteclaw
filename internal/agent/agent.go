@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"os/user"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -69,6 +70,18 @@ func New(cfg *config.Config) (*Agent, error) {
 	if cfg.Security.DangerousCommands {
 		exec.SetDangerousChecker(security.NewDangerousChecker())
 		logger.Info().Msg("Dangerous command checker enabled")
+	}
+
+	// Wire the config/secret lockdown guard. The authoritative protection is the
+	// OS (config/secrets owned by root, unreadable by the low-privilege service
+	// account — set up by the installer); this guard is in-process
+	// defense-in-depth. Disabled only when the operator opts out to "wide open".
+	guard := executor.NewGuard(cfg.Security.Lockdown, lockdownPaths(cfg))
+	exec.SetGuard(guard)
+	if guard.Enabled() {
+		logger.Info().Msg("Config/secret lockdown enabled — agent tools cannot read or modify config/secrets")
+	} else {
+		logger.Warn().Msg("Config/secret lockdown DISABLED (security.lockdown=false) — agent tools may access config and secrets")
 	}
 
 	// Create audit logger
@@ -156,6 +169,30 @@ func New(cfg *config.Config) (*Agent, error) {
 	}
 
 	return agent, nil
+}
+
+// lockdownPaths assembles the set of paths the agent's own tools must never
+// read or modify when lockdown is enabled: the config file + its directory
+// (from Config), the pass password store, and the running binary's directory.
+func lockdownPaths(cfg *config.Config) []string {
+	paths := cfg.LockdownPaths()
+
+	// pass store (holds the GPG-encrypted secrets).
+	if storeDir := os.Getenv("PASSWORD_STORE_DIR"); storeDir != "" {
+		paths = append(paths, storeDir)
+	} else {
+		home, err := os.UserHomeDir()
+		if err == nil && home != "" {
+			paths = append(paths, filepath.Join(home, ".password-store"))
+		}
+	}
+
+	// Directory of the running binary (prevents the agent overwriting itself).
+	if exePath, err := os.Executable(); err == nil {
+		paths = append(paths, filepath.Dir(exePath))
+	}
+
+	return paths
 }
 
 // newConverser constructs the inference client for the resolved provider.

@@ -14,6 +14,7 @@ type Config struct {
 	Description string // service description
 	ConfigPath  string // path to config file
 	BinaryPath  string // path to binary (empty = current executable)
+	UserName    string // OS account to run the service as (empty = platform default). Used to run under a dedicated low-privilege user so config/secrets owned by root remain unreadable by the agent.
 }
 
 // Manager wraps kardianos/service for service management
@@ -71,6 +72,10 @@ func New(cfg Config) (*Manager, error) {
 			"run",
 			"--config", cfg.ConfigPath,
 		},
+		// UserName runs the service under a dedicated low-privilege account so
+		// that config/secrets owned by root remain unreadable by the agent —
+		// the OS-enforced half of the lockdown. Empty = platform default.
+		UserName: cfg.UserName,
 	}
 
 	// Create service

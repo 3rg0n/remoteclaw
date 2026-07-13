@@ -54,7 +54,24 @@ security:
   dangerous_commands: true           # Block dangerous commands (rm -rf /, etc.)
   audit_log: ""                      # Audit log file path (empty = disabled)
   rate_limit_per_min: 10             # Max requests per minute per space (0 = disabled)
-  challenge: "${CHALLENGE}"          # Challenge token for destructive command confirmation (empty = disabled)
+  challenge: "${CHALLENGE}"          # AES-GCM ciphertext for destructive-command confirmation (empty = disabled).
+                                     # The passphrase (decryption key) is NEVER stored — it lives with the operator
+                                     # and is supplied via chat. Only this non-sensitive ciphertext lives here.
+
+  # Config/secret lockdown: deny the agent's OWN tools access to config and secrets.
+  # Default true (secure). The authoritative enforcement is the OS — the installer runs
+  # the service as a low-privilege account and root-owns config/secrets — this flag is the
+  # in-process defense-in-depth layer. Set false to opt out to "wide open".
+  lockdown: true
+  # Extra paths the agent's tools must never read/modify. The config file + its directory,
+  # the pass store, and the binary directory are protected automatically.
+  protected_paths: []
+
+# Secrets: service tokens (webex bot token, wmcp token, openai api key) are read from the
+# native `pass` store (passwordstore.org) under the remoteclaw/ prefix when available,
+# overriding the env/.env values below. If pass is unavailable, RemoteClaw falls back to
+# .env / environment variables and logs a warning (less secure at rest).
+#   pass insert remoteclaw/webex_bot_token
 
 # Execution
 execution:

@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- Native secret storage via `pass` (passwordstore.org): `WEBEX_BOT_TOKEN`,
+  `WMCP_TOKEN`, `OPENAI_API_KEY` read from the `remoteclaw/` store prefix
+  (strict key allowlist), overriding `.env`; falls back to `.env`/env with a
+  warning when `pass` is unavailable
+  ([ADR 0003](docs/adr/0003-secret-storage-and-config-lockdown.md))
+- Config/secret lockdown (`security.lockdown`, default true): the agent's own
+  tools cannot read or modify its config/`.env`/secret store — enforced by the
+  OS (installer runs the service as a dedicated low-privilege account with
+  root-owned config) with an in-process guard as defense-in-depth. Opt out with
+  `security.lockdown: false`
+- `remoteclaw install --user <account>` to run the service under a dedicated
+  low-privilege account
+- Installer prompts (secure defaults): lock down config/secrets, store secrets
+  in `pass`, enable the destructive-command challenge, restrict allowed emails
 - Local inference via the `inferd` daemon (`github.com/3rg0n/inferd/clients/go`)
   over a Unix socket / Windows named pipe — new default local provider
   ([ADR 0001](docs/adr/0001-inference-via-inferd-and-openai-compat.md))

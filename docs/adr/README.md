@@ -12,3 +12,5 @@ Format: [Nygard short form](https://github.blog/engineering/architecture-optimiz
 |-----|-------|--------|
 | [0001](0001-inference-via-inferd-and-openai-compat.md) | Inference via inferd (local) and OpenAI-compatible (remote); drop embedded Ollama and Bedrock SDKs | accepted |
 | [0002](0002-passthrough-mode.md) | Passthrough mode: execute inbound messages directly, no local inference | accepted |
+| [0003](0003-secret-storage-and-config-lockdown.md) | Secret storage via `pass`, and OS-enforced config/secret lockdown | accepted |
+| [0004](0004-privilege-separated-executor.md) | Privilege-separated executor for airtight config/secret isolation | proposed |

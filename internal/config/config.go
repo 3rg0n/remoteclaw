@@ -3,8 +3,11 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
+	"github.com/3rg0n/remoteclaw/internal/logging"
+	"github.com/3rg0n/remoteclaw/internal/secrets"
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
 )
@@ -26,6 +29,11 @@ type Config struct {
 	Security  SecurityConfig  `mapstructure:"security"`
 	Logging   LoggingConfig   `mapstructure:"logging"`
 	Health    HealthConfig    `mapstructure:"health"`
+
+	// sourcePath is the config file path this Config was loaded from. Not a
+	// mapstructure field; set by Load. Used to build the lockdown protected-path
+	// set so the agent's own tools cannot read/modify their config.
+	sourcePath string `mapstructure:"-"`
 }
 
 // WebexConfig holds Webex-specific settings
@@ -94,10 +102,12 @@ type LoggingConfig struct {
 
 // SecurityConfig holds security hardening settings
 type SecurityConfig struct {
-	DangerousCommands bool   `mapstructure:"dangerous_commands"` // Enable dangerous command blocking
-	AuditLog          string `mapstructure:"audit_log"`          // Path to audit log file (empty = disabled)
-	RateLimitPerMin   int    `mapstructure:"rate_limit_per_min"` // Max requests per minute per space
-	Challenge         string `mapstructure:"challenge"`          // Challenge string for destructive command confirmation (empty = disabled)
+	DangerousCommands bool     `mapstructure:"dangerous_commands"` // Enable dangerous command blocking
+	AuditLog          string   `mapstructure:"audit_log"`          // Path to audit log file (empty = disabled)
+	RateLimitPerMin   int      `mapstructure:"rate_limit_per_min"` // Max requests per minute per space
+	Challenge         string   `mapstructure:"challenge"`          // Challenge string for destructive command confirmation (empty = disabled)
+	Lockdown          bool     `mapstructure:"lockdown"`           // Deny the agent's own tools access to config/secrets (default true; false = wide open)
+	ProtectedPaths    []string `mapstructure:"protected_paths"`    // Extra paths the agent's tools must never read/modify (config dir, .env, pass store auto-added)
 }
 
 // HealthConfig holds health check settings
@@ -136,12 +146,73 @@ func Load(path string) (*Config, error) {
 	// Expand environment variables in string fields
 	cfg.expandEnvVars()
 
+	// Remember where we loaded from, for the lockdown protected-path set.
+	cfg.sourcePath = path
+
+	// Resolve secrets from the native store (pass), overriding env/.env values
+	// when present. Falls back to the already-expanded env values with a warning
+	// when the store is unavailable.
+	cfg.resolveSecretsWith(secrets.NewPassGetter(""))
+
 	// Validate the configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// resolveSecretsWith fills secret fields from the given secret store when it is
+// available and holds the corresponding entry. A value found in the store takes
+// precedence over the env/.env-expanded value. When the store is unavailable,
+// the env/.env values are kept and a single warning is logged. Secret values
+// are never logged. Factored out for testing with a fake Getter.
+func (c *Config) resolveSecretsWith(getter secrets.Getter) {
+	log := logging.Get()
+
+	if getter == nil || !getter.Available() {
+		// No native store: keep env/.env values. Only warn if a secret is
+		// actually configured via env (otherwise silence is fine).
+		if c.Webex.BotToken != "" || c.WMCP.Token != "" || c.AI.OpenAIAPIKey != "" {
+			log.Warn().Msg("native secret store unavailable; using .env/environment values for secrets (less secure at rest)")
+		}
+		return
+	}
+
+	resolve := func(key secrets.Key, current string) string {
+		val, found, err := getter.Get(key)
+		if err != nil {
+			log.Warn().Str("backend", getter.Name()).Str("key", string(key)).
+				Msg("secret store lookup failed; keeping env/.env value")
+			return current
+		}
+		if found {
+			log.Info().Str("backend", getter.Name()).Str("key", string(key)).
+				Msg("secret loaded from native store")
+			return val
+		}
+		return current
+	}
+
+	c.Webex.BotToken = resolve(secrets.KeyWebexBotToken, c.Webex.BotToken)
+	c.WMCP.Token = resolve(secrets.KeyWMCPToken, c.WMCP.Token)
+	c.AI.OpenAIAPIKey = resolve(secrets.KeyOpenAIAPIKey, c.AI.OpenAIAPIKey)
+}
+
+// LockdownPaths returns the set of paths the agent's own tools must never read
+// or modify when lockdown is enabled: the config file and its directory (which
+// holds .env), plus any operator-specified security.protected_paths. The pass
+// store and install/binary dirs are added by the caller (agent) since they are
+// resolved at runtime.
+func (c *Config) LockdownPaths() []string {
+	var paths []string
+	if c.sourcePath != "" {
+		if abs, err := filepath.Abs(c.sourcePath); err == nil {
+			paths = append(paths, abs, filepath.Dir(abs))
+		}
+	}
+	paths = append(paths, c.Security.ProtectedPaths...)
+	return paths
 }
 
 // applyDefaults sets default values in viper before unmarshaling
@@ -161,6 +232,7 @@ func applyDefaults(v *viper.Viper) {
 	v.SetDefault("security.audit_log", "")
 	v.SetDefault("security.rate_limit_per_min", 10)
 	v.SetDefault("security.challenge", "")
+	v.SetDefault("security.lockdown", true) // secure by default; operator can opt out to "wide open"
 	v.SetDefault("health.enabled", true)
 	v.SetDefault("health.addr", "127.0.0.1:9090")
 }
