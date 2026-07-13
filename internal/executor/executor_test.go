@@ -108,9 +108,12 @@ func TestExecuteCommandWithCustomTimeout(t *testing.T) {
 		command = "echo 'quick'"
 	}
 
+	// Use a generous per-command timeout: this test asserts that a quick command
+	// succeeds within its custom timeout, not that a shell cold-starts fast.
+	// PowerShell cold-start on Windows can exceed 2s.
 	result, err := exec.Execute(ctx, "execute_command", map[string]any{
 		"command": command,
-		"timeout": "1s",
+		"timeout": "20s",
 	})
 
 	require.NoError(t, err)

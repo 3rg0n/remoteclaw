@@ -8,11 +8,13 @@ import (
 	"github.com/3rg0n/remoteclaw/internal/agent"
 	"github.com/3rg0n/remoteclaw/internal/config"
 	"github.com/3rg0n/remoteclaw/internal/logging"
+	"github.com/3rg0n/remoteclaw/internal/security"
 	"github.com/3rg0n/remoteclaw/internal/service"
 	"github.com/spf13/cobra"
 )
 
 var cfgPath string
+var svcUser string
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -22,9 +24,9 @@ func main() {
 
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "remoteclaw",
-		Short: "RemoteClaw — AI-powered remote system control via Webex",
-		Long:  "RemoteClaw is a local agent that lets users remotely control a system via a Webex bot, powered by AI.",
+		Use:          "remoteclaw",
+		Short:        "RemoteClaw — AI-powered remote system control via Webex",
+		Long:         "RemoteClaw is a local agent that lets users remotely control a system via a Webex bot, powered by AI.",
 		SilenceUsage: true,
 	}
 
@@ -36,6 +38,7 @@ func newRootCmd() *cobra.Command {
 		newUninstallCmd(),
 		newStatusCmd(),
 		newVersionCmd(),
+		newEncryptChallengeCmd(),
 	)
 
 	return root
@@ -73,7 +76,7 @@ func newRunCmd() *cobra.Command {
 }
 
 func newInstallCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "install",
 		Short: "Install RemoteClaw as a system service",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -96,6 +99,7 @@ func newInstallCmd() *cobra.Command {
 				Description: "RemoteClaw — AI-powered remote system control via Webex",
 				ConfigPath:  absConfigPath,
 				BinaryPath:  binPath,
+				UserName:    svcUser,
 			})
 			if err != nil {
 				return fmt.Errorf("creating service manager: %w", err)
@@ -117,6 +121,8 @@ func newInstallCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&svcUser, "user", "", "OS account to run the service as (dedicated low-privilege user recommended so config/secrets stay unreadable by the agent)")
+	return cmd
 }
 
 func newUninstallCmd() *cobra.Command {
@@ -198,6 +204,25 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			fmt.Printf("RemoteClaw service status: %s\n", status)
+			return nil
+		},
+	}
+}
+
+func newEncryptChallengeCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "encrypt-challenge <passphrase>",
+		Short: "Encrypt a challenge passphrase into the CHALLENGE ciphertext",
+		Long: "Produces the AES-256-GCM ciphertext to set as the CHALLENGE value. " +
+			"The passphrase itself is never stored — only this ciphertext. Used by the installer.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			ciphertext, err := security.EncryptChallenge(args[0])
+			if err != nil {
+				return fmt.Errorf("encrypting challenge: %w", err)
+			}
+			// Print only the ciphertext to stdout so the installer can capture it.
+			fmt.Println(ciphertext)
 			return nil
 		},
 	}

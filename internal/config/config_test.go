@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3rg0n/remoteclaw/internal/secrets"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -616,4 +617,111 @@ func TestPassthroughMode(t *testing.T) {
 	assert.True(t, (&Config{AI: AIConfig{Mode: AIModePassthrough}}).PassthroughMode())
 	assert.False(t, (&Config{AI: AIConfig{Mode: AIModeInterpret}}).PassthroughMode())
 	assert.False(t, (&Config{AI: AIConfig{Mode: ""}}).PassthroughMode())
+}
+
+// fakeGetter is a test double for secrets.Getter.
+type fakeGetter struct {
+	available bool
+	values    map[secrets.Key]string
+	errs      map[secrets.Key]error
+}
+
+func (f *fakeGetter) Available() bool { return f.available }
+func (f *fakeGetter) Name() string    { return "fake" }
+func (f *fakeGetter) Get(key secrets.Key) (string, bool, error) {
+	if err, ok := f.errs[key]; ok {
+		return "", false, err
+	}
+	if v, ok := f.values[key]; ok {
+		return v, true, nil
+	}
+	return "", false, nil
+}
+
+func TestResolveSecrets_StoreOverridesEnv(t *testing.T) {
+	cfg := &Config{}
+	cfg.Webex.BotToken = "env-token"
+	cfg.WMCP.Token = "env-wmcp"
+	cfg.AI.OpenAIAPIKey = "env-key"
+
+	getter := &fakeGetter{
+		available: true,
+		values: map[secrets.Key]string{
+			secrets.KeyWebexBotToken: "store-token",
+			secrets.KeyOpenAIAPIKey:  "store-key",
+			// wmcp_token intentionally absent → keep env value
+		},
+	}
+	cfg.resolveSecretsWith(getter)
+
+	assert.Equal(t, "store-token", cfg.Webex.BotToken, "store value should override env")
+	assert.Equal(t, "store-key", cfg.AI.OpenAIAPIKey)
+	assert.Equal(t, "env-wmcp", cfg.WMCP.Token, "absent-in-store secret keeps env value")
+}
+
+func TestResolveSecrets_UnavailableStoreKeepsEnv(t *testing.T) {
+	cfg := &Config{}
+	cfg.Webex.BotToken = "env-token"
+
+	cfg.resolveSecretsWith(&fakeGetter{available: false})
+	assert.Equal(t, "env-token", cfg.Webex.BotToken)
+
+	// nil getter is also safe (keeps env).
+	cfg.resolveSecretsWith(nil)
+	assert.Equal(t, "env-token", cfg.Webex.BotToken)
+}
+
+func TestResolveSecrets_LookupErrorKeepsEnv(t *testing.T) {
+	cfg := &Config{}
+	cfg.Webex.BotToken = "env-token"
+
+	getter := &fakeGetter{
+		available: true,
+		errs:      map[secrets.Key]error{secrets.KeyWebexBotToken: assertErr("boom")},
+	}
+	cfg.resolveSecretsWith(getter)
+	assert.Equal(t, "env-token", cfg.Webex.BotToken, "lookup error must not clobber the env value")
+}
+
+// assertErr is a tiny error helper for tests.
+type assertErr string
+
+func (e assertErr) Error() string { return string(e) }
+
+func TestLockdownDefaultsTrue(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+mode: native
+webex:
+  bot_token: "t"
+ai:
+  provider: "inferd"
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0600))
+	cfg, err := Load(configPath)
+	require.NoError(t, err)
+	assert.True(t, cfg.Security.Lockdown, "lockdown must default to true (secure by default)")
+
+	// LockdownPaths includes the config file and its directory.
+	paths := cfg.LockdownPaths()
+	absConfig, _ := filepath.Abs(configPath)
+	assert.Contains(t, paths, absConfig)
+	assert.Contains(t, paths, filepath.Dir(absConfig))
+}
+
+func TestLockdownCanBeDisabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	configContent := `
+mode: native
+webex:
+  bot_token: "t"
+security:
+  lockdown: false
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0600))
+	cfg, err := Load(configPath)
+	require.NoError(t, err)
+	assert.False(t, cfg.Security.Lockdown, "operator opt-out to wide open must be honored")
 }

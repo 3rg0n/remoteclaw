@@ -25,16 +25,16 @@ const maxAuditFieldBytes = 10 * 1024 // 10KB
 
 // AuditEntry represents a single audit log entry
 type AuditEntry struct {
-	Timestamp      time.Time     `json:"timestamp"`
-	Email          string        `json:"email"`
-	SpaceID        string        `json:"space_id"`
-	RawMessage     string        `json:"raw_message"`
-	ToolCalls      []string      `json:"tool_calls,omitempty"`
-	ToolInputs     []string      `json:"tool_inputs,omitempty"` // serialized tool parameters
-	Response       string        `json:"response"`
-	Duration       time.Duration `json:"duration_ms"`
-	Error          string        `json:"error,omitempty"`
-	Confirmed      bool          `json:"confirmed,omitempty"` // true if via challenge-response
+	Timestamp  time.Time     `json:"timestamp"`
+	Email      string        `json:"email"`
+	SpaceID    string        `json:"space_id"`
+	RawMessage string        `json:"raw_message"`
+	ToolCalls  []string      `json:"tool_calls,omitempty"`
+	ToolInputs []string      `json:"tool_inputs,omitempty"` // serialized tool parameters
+	Response   string        `json:"response"`
+	Duration   time.Duration `json:"duration_ms"`
+	Error      string        `json:"error,omitempty"`
+	Confirmed  bool          `json:"confirmed,omitempty"` // true if via challenge-response
 }
 
 // AuditLogger writes structured NDJSON audit entries with daily rotation and 30-day retention.
@@ -92,11 +92,21 @@ func NewAuditLogger(basePath string) (*AuditLogger, error) {
 var secretPatterns = regexp.MustCompile(
 	`(?i)` + // case-insensitive
 		`(?:` +
-		`(?:api[_-]?key|token|secret|password|passwd|authorization|bearer)\s*[:=]\s*\S+` + // key=value patterns
+		// "authorization: Bearer <tok>" / "authorization = <tok>" — swallow an
+		// optional Bearer/Basic scheme word plus the credential that follows.
+		`authorization\s*[:=]\s*(?:bearer\s+|basic\s+)?\S+` +
+		`|` +
+		`(?:api[_-]?key|token|secret|password|passwd)\s*[:=]\s*\S+` + // key=value / key: value
+		`|` +
+		`bearer\s+\S+` + // bare "Bearer <token>" (space-separated)
+		`|` +
+		`-p\S+` + // mysql/curl-style -pPASSWORD (no space)
 		`|` +
 		`(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36,}` + // GitHub tokens
 		`|` +
 		`(?:xoxb|xoxp|xoxs)-[A-Za-z0-9-]+` + // Slack tokens
+		`|` +
+		`sk-[A-Za-z0-9_-]{10,}` + // OpenAI-style secret keys
 		`|` +
 		`AKIA[0-9A-Z]{16}` + // AWS access key
 		`|` +
@@ -148,7 +158,13 @@ func (al *AuditLogger) Log(entry AuditEntry) {
 		Str("error", entry.Error)
 
 	if len(entry.ToolInputs) > 0 {
-		evt = evt.Strs("tool_inputs", entry.ToolInputs)
+		// Scrub secrets and truncate each tool input — a command line may embed
+		// a token/password (e.g. `mysql -pSECRET`). Same treatment as RawMessage.
+		scrubbed := make([]string, len(entry.ToolInputs))
+		for i, in := range entry.ToolInputs {
+			scrubbed[i] = truncateField(scrubSecrets(in), maxAuditFieldBytes)
+		}
+		evt = evt.Strs("tool_inputs", scrubbed)
 	}
 	if entry.Confirmed {
 		evt = evt.Bool("confirmed", true)

@@ -1,361 +1,228 @@
 # MAESTRO Threat Model
 
 **Project**: RemoteClaw — AI-powered remote system control via Webex
-**Date**: 2026-04-06
+**Date**: 2026-07-13
 **Framework**: MAESTRO (OWASP MAS + CSA) with ASI Threat Taxonomy
 **Taxonomy**: T1-T15 core, T16-T47 extended, BV-1-BV-12 blindspot vectors
 
 ## Executive Summary
 
-RemoteClaw is a Go-based CLI agent that receives commands from Webex chat, interprets them via LLM (AWS Bedrock Claude or local Ollama), and executes them on the local machine through 7 tools including arbitrary shell execution. Analysis across all 7 MAESTRO layers identified **33 unique findings**: 6 Critical, 11 High, 13 Medium, and 3 Low severity. The most critical risks stem from **prompt injection** (direct and indirect), **unrestricted shell execution** with bypassable regex-only guardrails, **missing installer integrity verification**, and **WMCP identity spoofing**. Three agentic risk factors are present: Non-Determinism, Autonomy, and Agent Identity.
+This revision re-models RemoteClaw after the inference-layer refactor (PR #1): the embedded **Ollama and AWS Bedrock SDKs were removed** and replaced with two transports behind the `ai.Converser` interface — **`inferd`** (local daemon over a Unix socket / Windows named pipe) and **`openai-compat`** (any OpenAI-compatible HTTP endpoint) — plus a new **`ai.mode: passthrough`** in which an inbound Webex message is executed directly as a command with no local inference.
+
+Analysis across all 7 MAESTRO layers identified **19 verified findings**: 1 Critical, 7 High, 8 Medium, 3 Low. The dominant *new* risk is the **remote inference trust boundary** on RemoteClaw's **outbound** openai-compat client: `openai_base_url` is accepted with **no TLS/scheme enforcement**, so the API key and the full conversation can be sent in cleartext to — and crafted tool-calls received from — an operator-configured remote host (finding N-1). This is an *outbound client* exposure, not an inbound listener (see note below). The core pre-existing risk remains **unrestricted shell execution** gated only by regex + challenge-response.
+
+> **Inbound surface (clarification).** RemoteClaw exposes **no inbound network listener for its function** — Webex is an outbound Mercury WebSocket + REST client, inferd is outbound local IPC, and openai-compat is an outbound HTTP client. The *only* inbound socket is the optional health endpoint (`internal/agent/health.go`), plaintext HTTP bound to `127.0.0.1:9090` by default and opt-out via `health.enabled`. Findings N-1/N-2 concern what RemoteClaw *sends outbound*, not anything it serves. The only inbound-surface finding is C-7 (health addr not hard-pinned to loopback).
+
+The refactor **reduced** two risks: the old "no integrity check on Ollama auto-pull" is gone (inferd owns the model; RemoteClaw pulls nothing), and RemoteClaw no longer requires AWS credentials in its own environment. `govulncheck` reports **0 vulnerabilities affecting the code** (go-jose CVE GO-2026-4945 was patched in the same PR).
+
+Three agentic risk factors are present: **Non-Determinism**, **Autonomy**, **Agent Identity**.
+
+### Validation manifest
+
+| Metric | Value |
+|---|---|
+| Layer agents run | L1, L2, L3, L4, L5, L6, L7, CVE, INTEGRITY |
+| Agents grounded (read code / ran scanner) | L1, L2, L3, L4, L5, CVE, INTEGRITY |
+| Agents discarded as ungrounded (0 tool calls, fabricated specifics) | **L6 (both attempts), L7** |
+| Findings independently verified by orchestrator against source | 19 |
+| Fabricated claims debunked and dropped | 4 (see below) |
+| CVEs (govulncheck) | 0 affecting code |
+
+**Fabricated claims dropped after source verification**: (1) "challenge TTL is 5 minutes / no brute-force lockout" — false; `challenge.go:19` sets `challengeTTL = 2 * time.Minute` and `:42` enforces `maxChallengeAttempts = 3`. (2) "passthrough strips user identity from the audit trail" — false; `handlePassthrough` logs `Email` and `SpaceID`. (3) "inferd uses gRPC on localhost:50051" — false; it uses a Unix socket / named pipe. (4) "ai.mode is not validated" — false; `config.go` `Validate()` rejects invalid modes. Findings that ungrounded agents gestured at but that a *grounded* agent independently confirmed by reading code (notably the `openai_base_url` TLS gap) are retained.
 
 ## Scope
 
 - **Languages**: Go 1.26
-- **AI Components**: Yes — AWS Bedrock (Claude Sonnet 4.6), Ollama (local models), agentic tool-call loop with 7 tools
+- **AI Components**: Yes — pluggable inference via `inferd` (local daemon) or `openai-compat` (remote OpenAI-compatible HTTP); agentic tool-call loop with 7 tools; optional passthrough mode with no inference
 - **Entry Points**: `cmd/remoteclaw/main.go` (CLI: run, install, uninstall, status, version)
-- **External Services**: Webex (Mercury WebSocket + REST), AWS Bedrock, Ollama, WMCP relay (optional)
+- **External Services**: Webex (Mercury WebSocket + REST), WMCP relay (optional), inferd daemon (local IPC), openai-compat endpoint (operator-configured HTTP)
 - **Agentic Risk Factors**:
-  - **Non-Determinism**: LLM outputs vary by temperature/model, causing intermittent security control failure
-  - **Autonomy**: Agent executes commands at machine speed with no mandatory human gate
-  - **Agent Identity**: Webex bot token is sole identity; WMCP provides no cryptographic identity proof
+  - **Non-Determinism**: model outputs vary; a compromised/remote model backend is now operator-selected
+  - **Autonomy**: commands execute at machine speed with no mandatory human gate (except challenge-response on blocked commands)
+  - **Agent Identity**: Webex bot token / WMCP token are the only identities; the remote openai-compat endpoint is trusted by configuration, not cryptographic proof
 
 ## Risk Summary
 
+Findings prefixed **N-** are new or materially changed by the refactor; **C-** are carried forward from the prior model and re-verified against current code; **R-** are risks the refactor removed or reduced.
+
 | # | ASI Threat ID | Layer | Title | Severity | L | I | Risk | Risk Factors | Traditional Framework |
 |---|---------------|-------|-------|----------|---|---|------|--------------|----------------------|
-| 1 | T6 | L1,L3 | Direct Prompt Injection — Unsanitized User Input | Critical | 3 | 3 | 9 | Non-Det, Autonomy | LLM01, AML.T0031, CWE-74 |
-| 2 | BV-4, T6 | L1,L3 | Indirect Prompt Injection via Tool Outputs | Critical | 3 | 3 | 9 | Non-Det, Autonomy | LLM01, AML.T0051.002, CWE-74 |
-| 3 | T2, T11 | L3,L4 | Unrestricted Shell Execution (execute_command) | Critical | 2 | 3 | 6 | Autonomy | CWE-78, CWE-269, OWASP A01, STRIDE:EoP |
-| 4 | T9 | L6,L7 | WMCP Identity Spoofing — No Message Authentication | Critical | 2 | 3 | 6 | Agent Identity | CWE-287, STRIDE:Spoofing |
-| 5 | T13, T36 | L7 | No Installer Checksum Verification | Critical | 2 | 3 | 6 | — | CWE-345, BV-3 |
-| 6 | T13, T36 | L7 | Release Artifacts Not Code-Signed | Critical | 2 | 3 | 6 | — | CWE-345, BV-3 |
-| 7 | T11 | L3,L4,L6 | Dangerous Command Checker Bypass (Regex Evasion) | High | 3 | 2 | 6 | Non-Det | CWE-78, CWE-184, OWASP A03 |
-| 8 | T3, T19 | L3,L4 | ForceExecuteCommand Bypasses Dangerous Checker | High | 2 | 3 | 6 | Autonomy | CWE-863, CWE-269, STRIDE:EoP |
-| 9 | T44, T8 | L5 | Tool Parameters & Outputs Not in Audit Trail | High | 3 | 2 | 6 | — | CWE-778, STRIDE:Repudiation |
-| 10 | T8 | L5 | Audit Logging Can Be Silently Disabled | High | 2 | 3 | 6 | — | CWE-778, STRIDE:Repudiation |
-| 11 | T23 | L5 | No Tamper Protection on Audit Logs | High | 2 | 3 | 6 | — | CWE-778, STRIDE:Tampering |
-| 12 | T1 | L1 | No Model Integrity Verification (Ollama Pull) | High | 2 | 3 | 6 | Non-Det | LLM06, AML.T0020, CWE-345 |
-| 13 | BV-1 | L1 | Context Window Poisoning via History Accumulation | High | 2 | 3 | 6 | Non-Det | LLM03, AML.T0047 |
-| 14 | T3, T45 | L4,L6 | No Root/Privilege Check at Startup | High | 2 | 2 | 4 | Autonomy | CWE-250, CWE-269 |
-| 15 | T29 | L3 | Symlink Bypass on File Path Validation | High | 2 | 2 | 4 | — | CWE-59, CWE-22 |
-| 16 | T9 | L7 | WMCP Non-TLS Only Warns, Does Not Block | High | 2 | 2 | 4 | Agent Identity | CWE-319, STRIDE:ID |
-| 17 | T39 | L7 | No LLM Token Budget Enforcement (Bedrock) | High | 2 | 2 | 4 | — | CWE-770, BV-6 |
-| 18 | T7 | L1 | Soft Safety Constraints in System Prompt | Medium | 2 | 2 | 4 | Non-Det | LLM04, AML.T0032 |
-| 19 | T32 | L3 | No Circuit Breaker / Global Timeout on Agentic Loop | Medium | 2 | 2 | 4 | Autonomy | CWE-400, STRIDE:DoS |
-| 20 | T22 | L4,L6 | Credential Exposure (Env Vars, Error Messages, Memory) | Medium | 2 | 2 | 4 | — | CWE-532, CWE-798 |
-| 21 | T10 | L5 | No Alerting on Dangerous/Blocked Operations | Medium | 3 | 1 | 3 | — | STRIDE:Repudiation |
-| 22 | T16 | L1 | Model Inconsistency (Temperature/Provider Variance) | Medium | 2 | 1 | 2 | Non-Det | LLM08, AML.T0032 |
-| 23 | T4 | L4 | No Global Rate Limit Across Spaces | Medium | 2 | 2 | 4 | — | CWE-400, STRIDE:DoS |
-| 24 | BV-9 | L3,L6 | TOCTOU in Challenge-Response Verification | Medium | 1 | 2 | 2 | — | CWE-367 |
-| 25 | T19 | L3,L6 | No Brute-Force Limit on Challenge Attempts | Medium | 2 | 2 | 4 | — | CWE-307 |
-| 26 | CWE-532 | L5 | Secrets Not Scrubbed from Audit Logs | Medium | 2 | 2 | 4 | — | CWE-532, STRIDE:ID |
-| 27 | T24 | L6 | Missing Dangerous Command Patterns (insmod, crontab, etc.) | Medium | 2 | 2 | 4 | — | CWE-78 |
-| 28 | T13 | L7 | Missing SBOM and License Audit | Medium | 1 | 2 | 2 | — | BV-3, CWE-1104 |
-| 29 | T15 | L7 | AI Output Not Validated Against System State | Medium | 2 | 1 | 2 | Non-Det | ASI-only |
-| 30 | T25 | L7 | Ollama Single Point of Failure (No Fallback) | Medium | 2 | 1 | 2 | — | CWE-754 |
-| 31 | T3 | L4 | Read Operations Skip Sensitive Path Check | Low | 2 | 1 | 2 | — | CWE-22 |
-| 32 | T20 | L2 | Silent Bedrock Deserialization Failure | Low | 1 | 1 | 1 | — | CWE-502 |
-| 33 | CWE-117 | L2 | User-Controlled Data in Structured Logs | Low | 1 | 1 | 1 | — | CWE-117 |
+| C-1 | T2, T11 | L3,L4 | Unrestricted Shell Execution (execute_command) | Critical | 3 | 3 | 9 | Autonomy | CWE-78, OWASP A03, STRIDE:E |
+| N-1 | T9, T22, BV-11 | L1,L4,L6 | openai_base_url (outbound client) — No TLS/Scheme Enforcement (key + conversation in cleartext, MITM) | High | 2 | 3 | 6 | Agent Identity | CWE-319, OWASP A02, STRIDE:S |
+| N-2 | T47, T13, T12 | L7 | Rogue/Compromised openai-compat Endpoint Drives Tool Calls (outbound trust) | High | 2 | 3 | 6 | Non-Det, Autonomy | CWE-345, LLM01, STRIDE:T |
+| C-2 | T11 | L3,L6 | Dangerous Command Checker Bypass (Regex Evasion) | High | 3 | 2 | 6 | Non-Det | CWE-78, CWE-184, OWASP A03 |
+| C-3 | T3 | L4,L6 | Runs as Root/SYSTEM Service — Implicit Privilege Escalation | High | 2 | 3 | 6 | Autonomy | CWE-250, CWE-269, STRIDE:E |
+| C-4 | T23 | L5 | No Tamper Protection on Audit Logs | High | 2 | 3 | 6 | — | CWE-778, STRIDE:T |
+| C-5 | T9 | L1,L7 | WMCP `ws://` Only Warns, Does Not Block (token cleartext) | High | 2 | 2 | 4 | Agent Identity | CWE-319, STRIDE:S |
+| C-6 | T2, T3 | L3 | write_file / kill_process Skip the Dangerous Checker | High | 2 | 2 | 4 | Autonomy | CWE-862, STRIDE:E |
+| N-3 | T22 | L2,L5 | Tool Inputs Not Scrubbed in Audit Log | Medium | 2 | 2 | 4 | — | CWE-532, OWASP A09, STRIDE:I |
+| N-4 | T7 | L3 | Passthrough Removes LLM Soft-Filter (deterministic gates only) | Medium | 2 | 2 | 4 | Autonomy, Non-Det | ASI-only, LLM01 |
+| N-5 | T3 | L4 | inferd_socket Path Override Unvalidated (local MITM of inference) | Medium | 1 | 2 | 2 | Agent Identity | CWE-426, CWE-59 |
+| C-7 | T3, T43 | L4 | Health Endpoint Can Bind Non-Loopback (no auth) | Medium | 2 | 2 | 4 | — | CWE-345, STRIDE:I |
+| C-8 | T13, T36 | L4,L7 | Release Artifacts Unsigned / Checksums Unattested | Medium | 2 | 2 | 4 | — | CWE-347, BV-3 |
+| C-9 | T22 | L4 | Unrestricted os.ExpandEnv on Config Strings | Medium | 1 | 2 | 2 | — | CWE-95 |
+| C-10 | T32 | L3 | No Per-Iteration Timeout / Backoff in Agentic Loop | Medium | 1 | 2 | 2 | Autonomy | CWE-400, STRIDE:D |
+| C-11 | T5 | L2,L3 | Tool Input Not Schema-Validated (mitigated by dispatch allowlist) | Medium | 2 | 1 | 2 | Non-Det | CWE-20, LLM07 |
+| C-12 | T3 | L4 | readFile Skips Sensitive-Path Check | Low | 2 | 1 | 2 | — | CWE-22 |
+| N-6 | T44 | L5 | Passthrough Blocked Commands Not Flagged in Audit Schema | Low | 2 | 1 | 2 | — | CWE-778 |
+| C-13 | T44 | L5 | No Backend/Provider Attribution in Audit Entries | Low | 1 | 1 | 1 | — | CWE-778 |
+
+**Risk reduced by the refactor (tracked for completeness):**
+
+| # | Former Threat | Change |
+|---|---------------|--------|
+| R-1 | T1 — No integrity check on Ollama model auto-pull (was HIGH) | **Removed.** inferd owns the model lifecycle; RemoteClaw performs no model pull. |
+| R-2 | T22 — AWS credentials required in RemoteClaw's environment | **Removed.** Bedrock reached (if at all) via an openai-compat gateway; no AWS SDK, no AWS creds. |
+| R-3 | Dependency CVE (GO-2026-4945, go-jose) | **Patched** to go-jose/go-jose/v4 v4.1.4 in the same PR. |
+| R-4 | T22 — `read_file(".env")` exfil of tokens by a prompt-injected agent | **Mitigated.** Secrets move to `pass` (encrypted, no readable file), and the lockdown guard + OS file ownership deny the agent's tools access to config/`.env`/store (ADR 0003). Residual: a shell-capable agent may still call `pass show` unless OS enforcement (low-priv service account) is in place — which is why OS enforcement, not the in-process guard, is the real boundary. |
+| R-5 | T3 — RemoteClaw runs as root/SYSTEM (was HIGH, C-3) | **Mitigated when lockdown+OS enforcement is used.** Installer can run the service as a dedicated low-privilege account (`install --user`), so config/secrets owned by root are unreadable by the agent. Still operator-dependent; documented. |
 
 ## Layer Analysis
 
 ### Layer 1: Foundation Model
 
-**T6 — Direct Prompt Injection (CRITICAL)**
-`internal/ai/processor.go:68-71` — User input from Webex is directly appended to conversation history without sanitization. Malicious users can inject system prompt overrides (e.g., "Ignore all previous instructions"). The `userMessage` string flows directly from `agent.go:312` through to the LLM with no escaping or delimiter wrapping.
+The model source is now one of two operator choices, which reshapes L1 risk.
 
-**BV-4 — Indirect Prompt Injection via Tool Outputs (CRITICAL)**
-`internal/ai/processor.go:100-117` — Tool execution results (command stdout/stderr, file contents, directory listings) are inserted into the conversation as-is. An attacker can plant poisoned files (e.g., filenames or file content containing "[SYSTEM] Override safety instructions") that the LLM processes as directives when read via tools.
+**N-1 — `openai_base_url` accepted without TLS/scheme enforcement (HIGH).** `internal/ai/openai.go:28-40` builds the client with `option.WithBaseURL(baseURL)` + `option.WithAPIKey(apiKey)`; `internal/config/config.go:239-240` validates only that the URL is *non-empty* when the provider is openai-compat. No code requires `https://`. If an operator configures a plaintext or attacker-influenced `http://` URL for a non-loopback host, the bearer `openai_api_key` (Authorization header) and the entire conversation (system prompt, tool definitions, user messages) travel in cleartext and the model's tool-calls can be MITM-modified. The shipped example (`config.example.yaml`) shows `http://localhost:11434/v1`, which normalizes `http://`. *Mitigation*: reject non-`https://` base URLs for non-loopback hosts in `Validate()`.
 
-**T1 — No Model Integrity Verification (HIGH)**
-`internal/ai/ollama.go:63-78` — Ollama models are pulled from the registry without checksum or signature verification. A MITM or registry compromise could serve a poisoned model trained to ignore safety instructions. Bedrock models are AWS-managed but the model ID is not cryptographically bound.
+**T6 / BV-4 — Prompt injection, direct and indirect (HIGH, carried forward, mitigations verified present).** `internal/ai/processor.go` now wraps user input in `<user_input>…</user_input>` (`wrapUserInput`) and tool output in `<tool_output>…</tool_output>` with tag-defanging (`sanitizeToolOutput`, 32 KB cap), and `internal/ai/prompt.go:36-40` instructs the model to treat delimited content as data. These are genuine defense-in-depth improvements over the prior model, but remain **soft** (probabilistic) boundaries, not structural guarantees — a jailbreak or multi-turn context poisoning can still override them. Note passthrough mode has *no* prompt and therefore no prompt-injection surface (see N-4).
 
-**BV-1 — Context Window Poisoning (HIGH)**
-`internal/agent/conversation.go:9-107` — 512KB/20 message history limit allows gradual context accumulation. Attacker can fill context with large tool outputs, diluting system prompt saliency.
+**R-1 — Model integrity (risk reduced).** The former Ollama auto-pull-without-verification finding is gone: `internal/ai/inferd.go` connects to a daemon that owns model management; RemoteClaw pulls nothing. Trust shifts to the local inferd daemon (assumed trusted; see N-5 for the socket-override caveat).
 
-**T7 — Soft Safety Constraints (MEDIUM)**
-`internal/ai/prompt.go:6-48` — Safety instructions ("Do not attempt privilege escalation") are advisory only. No technical enforcement if the LLM decides to ignore them.
-
-**T16 — Model Inconsistency (MEDIUM)**
-`internal/config/config.go:128-141` — Temperature is configurable (0.0-1.0). At high temperatures, the model may intermittently ignore safety instructions. Different providers (Ollama phi4-mini vs Bedrock Claude) have vastly different safety alignment.
+**T16 — Model inconsistency (LOW).** Behavior can diverge between an inferd-hosted model and an arbitrary openai-compat model (tokenization, tool-call grammar, safety alignment); temperature is capped at 0.3 (`config.go`) but a remote backend may ignore it.
 
 ### Layer 2: Data Operations
 
-**Tool Input Deserialization (MEDIUM)**
-`internal/ai/bedrock.go:164-170`, `internal/ai/ollama.go:149-158` — Tool input parameters from AI responses are deserialized as `map[string]any` without schema validation. Malformed parameters pass through to executors.
+**N-3 — Tool inputs not scrubbed in audit log (MEDIUM).** `internal/logging/audit.go:150-151` writes `entry.ToolInputs` via `evt.Strs("tool_inputs", …)` with **no** `scrubSecrets()` pass, whereas `RawMessage` and `Response` *are* scrubbed at `:137-138`. Tool inputs are serialized in `internal/agent/agent.go` as `fmt.Sprintf("%s(%v)", ToolName, Input)`; an `execute_command` whose command line embeds a secret (e.g. `mysql -pHUNTER2`) lands in the audit log unredacted. Both the AI loop and passthrough populate this field. *Mitigation*: run each `ToolInputs` element through `scrubSecrets` before writing.
 
-**Conversation History Contains Untrusted Content (MEDIUM)**
-`internal/agent/conversation.go:51-73` — Tool results stored verbatim in history create a feedback loop where poisoned content accumulates across turns.
-
-**Silent Bedrock Deserialization Failure (LOW)**
-`internal/ai/bedrock.go:164-170` — `UnmarshalSmithyDocument` failures silently fall back to empty map, masking malformed responses.
-
-**User-Controlled Data in Structured Logs (LOW)**
-`internal/logging/audit.go:100-109` — While zerolog's JSON format prevents classic newline injection, untrusted user emails and message content are logged verbatim.
+**C-11 — Tool input not schema-validated (MEDIUM, mitigated).** `inferd.go:190-200` and `openai.go:199-216` unmarshal tool arguments into `map[string]any` and, on error, log a warning and continue with an empty map — no validation that arguments match the tool schema. Impact is bounded because `executor.dispatch` (`executor.go:77-95`) is an effective allowlist: an unknown tool name returns `"unknown tool"` and never executes. Go's `encoding/json` is memory-safe, so classic deserialization RCE (CWE-502) does not apply, but unbounded input size is not explicitly capped before unmarshal.
 
 ### Layer 3: Agent Frameworks
 
-**T2/T11 — Unrestricted Shell Execution (CRITICAL)**
-`internal/ai/tools.go:13-30`, `internal/executor/command.go:41-63` — The `execute_command` tool accepts ANY shell command. The only protection is the dangerous command regex checker, which is bypassable. The tool violates least-privilege: it gives the AI access to every capability the OS user has.
+**C-1 — Unrestricted shell execution (CRITICAL).** `execute_command` runs arbitrary shell (`internal/executor/command.go`); this is the product's core function and its core risk. Gated by the dangerous-command checker and challenge-response, but those are policy layers, not a sandbox.
 
-**T11 — Dangerous Command Checker Bypass (HIGH)**
-`internal/security/dangerous.go:23-76` — Regex patterns can be evaded via: quoting (`"rm" -rf /`), variable expansion (`$(which rm) -rf /`), binary paths (`/bin/rm -rf /`), command substitution, backtick execution, and environment variable injection (`LD_PRELOAD`).
+**N-4 — Passthrough removes the LLM soft-filter (MEDIUM).** In `ai.mode: passthrough`, `messageHandler` routes the raw message to `handlePassthrough`, which executes it directly. **The guardrail wiring was verified intact**: passthrough calls the *same* `executeToolGuarded` helper as the AI loop (`agent.go`), so the dangerous checker, challenge-response (spaceID correctly threaded via `spaceIDKey`), rate limit, allowlist, and audit all apply identically — the Integrity audit and orchestrator review both confirm this is **not** a guardrail bypass. The residual risk is the loss of the model's *interpretive* soft-filter (which in interpret mode can decline semantically dangerous but pattern-clean requests). This is a documented, accepted trade (ADR 0002); the deterministic gates are the real controls. *Mitigation*: require allowlist + challenge-response whenever passthrough is enabled.
 
-**T3/T19 — ForceExecuteCommand Bypass (HIGH)**
-`internal/executor/executor.go:65-70`, `internal/agent/agent.go:357-365` — Challenge-confirmed commands execute via `ForceExecuteCommand` which skips ALL dangerous command checks. Combined with weak passphrase or brute-force (scrypt ~100ms/attempt, 2-min TTL, unlimited attempts), this is a privilege escalation path.
+**C-6 — write_file / kill_process skip the dangerous checker (HIGH).** `executor.go:48` applies the dangerous-command checker **only** to `execute_command`. `write_file`, `kill_process`, and others dispatch unchecked (`write_file` has a sensitive-path check, but there is no unified capability gate). A model (or rogue endpoint, N-2) can chain `list_dir` → `write_file` (drop a script) → `execute_command` (a checker-clean invocation) to act. *Mitigation*: extend policy checks across all state-changing tools.
 
-**T29 — Symlink Bypass on File Validation (HIGH)**
-`internal/executor/filesystem.go:82-105` — `isSensitivePath()` uses `filepath.Abs`/`filepath.Clean` but does not resolve symlinks via `filepath.EvalSymlinks()`. Attackers can write to sensitive locations through symlink indirection.
-
-**T6/T5 — Intent Breaking via Tool Results (HIGH)**
-`internal/ai/processor.go:87-96, 120-124` — Tool results are passed as "user" role messages, not system boundary markers. The model cannot distinguish injected instructions in tool output from legitimate system directives.
-
-**T32 — No Circuit Breaker (MEDIUM)**
-`internal/ai/processor.go:74-128` — Max iterations limit is per-message only. No global timeout, no token budget, no detection of tool-call loops. Each iteration calls the converser with full history, consuming tokens.
-
-**BV-9 — TOCTOU in Challenge-Response (MEDIUM)**
-`internal/security/challenge.go:86-112` — Passphrase verification (~100ms scrypt) happens outside the mutex lock. Cleanup goroutine can race with verification.
-
-**T19 — No Brute-Force Limit on Challenges (MEDIUM)**
-`internal/security/challenge.go` — Unlimited verification attempts within the 2-minute TTL window.
+**C-10 — No per-iteration timeout/backoff (MEDIUM).** `processor.go` enforces a 5-minute whole-loop deadline and a 3-consecutive-error circuit breaker, but no per-iteration timeout or backoff; a backend that hangs near the per-tool timeout can consume the full window.
 
 ### Layer 4: Deployment Infrastructure
 
-**T3/T45 — No Root Privilege Check (HIGH)**
-`internal/agent/agent.go:117-125` — Agent retrieves username but does not verify it is not running as root. If deployed as a systemd service under root, all commands execute with root privileges.
+**C-3 — Runs as root/SYSTEM service (HIGH).** `internal/service/manager.go` installs an always-on system service; `agent.go` warns on root but does not refuse. A low-privilege Webex user's message is executed by a root/SYSTEM process — implicit privilege escalation with no capability dropping/seccomp. *Note the refactor's deployment tension*: inferd is a **per-user** daemon (stops at logout), while RemoteClaw is a system service — the socket path and lifecycle may not align, encouraging insecure workarounds.
 
-**T22 — Credential Exposure (MEDIUM)**
-`internal/config/config.go:148-155` — Webex bot token and WMCP token are loaded from env vars/config. Config file permissions are not validated at runtime. Tokens visible in process arguments. Error messages may include credential context.
+**N-5 — inferd_socket path override unvalidated (MEDIUM).** `inferd.go` `dialInferdOverride` connects to whatever `ai.inferd_socket` path is configured, with no validation (no traversal/ownership check). A local attacker able to edit config or plant a socket could interpose a malicious daemon and control model output → tool calls. Local-only, so likelihood is low. *Mitigation*: restrict to platform-default directories; validate ownership.
 
-**T4 — No Global Rate Limit (MEDIUM)**
-`internal/security/ratelimit.go:8-98`, `internal/agent/agent.go:290-293` — Rate limiting is per-space only. Multiple spaces can overwhelm the system concurrently. No limit on concurrent command executions.
+**C-7 — Health endpoint can bind non-loopback (MEDIUM).** `health.addr` defaults to `127.0.0.1:9090` but is operator-settable to `0.0.0.0` with no auth, exposing uptime/last-message/connection status.
 
-**T43 — WMCP Without TLS Enforcement (HIGH)**
-`internal/connect/wmcp.go:42-46` — Non-TLS WMCP endpoints produce a warning but are accepted. Auth tokens sent in cleartext over `ws://`.
+**C-8 — Release artifacts unsigned (MEDIUM).** `.github/workflows/release.yml` publishes binaries + checksums with no cryptographic signing; a compromised CI/account can forge both. Installers verify checksums but not signer identity.
 
-**CI/CD — Actions Not Pinned to Commit Hash (MEDIUM)**
-`.github/workflows/release.yml` — Uses `@v4`/`@v5` version tags instead of full commit SHAs, vulnerable to tag hijacking.
-
-**T3 — Read Operations Skip Sensitive Path Check (LOW)**
-`internal/executor/filesystem.go:36` — `readFile` does not call `isSensitivePath()`, allowing reads of `/etc/shadow`, `~/.ssh/id_rsa`, etc.
+**C-9 — Unrestricted `os.ExpandEnv` (MEDIUM).** `config.go` `expandEnvVars` expands `${VAR}` in several config strings (`openai_base_url`, `challenge`, `audit_log`, `inferd_socket`) from the process environment with no allowlist; in service mode the inherited environment is the injection surface.
 
 ### Layer 5: Evaluation & Observability
 
-**T44/T8 — Tool Parameters Not in Audit Trail (HIGH)**
-`internal/agent/agent.go:324-331` — Audit entries record tool names but not their parameters. An `execute_command("rm -rf /")` shows only `["execute_command"]` in audit. Command inputs, outputs, and AI reasoning are lost.
+**C-4 — No tamper protection on audit logs (HIGH).** `audit.go` opens files `O_APPEND` at mode 0600, but there is no signing/HMAC/append-only enforcement; a privileged user can edit or delete entries (T23), and audit logging can be disabled entirely by config (only a startup warning fires).
 
-**T8 — Audit Logging Can Be Disabled (HIGH)**
-`internal/config/config.go:139`, `internal/agent/agent.go:62-70` — Empty `security.audit_log` config silently disables all audit logging. No warning, no enforcement.
+**N-6 — Passthrough blocked commands not distinctly flagged (LOW).** A blocked passthrough command is audited (with `Email`/`SpaceID` — the "identity stripped" claim was false), but the schema has no explicit `Blocked` flag distinct from `Confirmed`, so blocked-vs-executed is inferred from response text. *Mitigation*: add an explicit `Blocked` field.
 
-**T23 — No Tamper Protection on Audit Logs (HIGH)**
-`internal/logging/audit.go:142-152` — NDJSON files written with `0600` permissions and `O_APPEND`, but no HMAC, hash chain, or digital signature. Attacker with file access can delete, modify, or inject entries.
-
-**T10 — No Alerting on Dangerous Operations (MEDIUM)**
-No webhook, syslog, or notification mechanism for blocked/confirmed dangerous commands. Security events are buried in regular log streams.
-
-**CWE-532 — Secrets in Audit Logs (MEDIUM)**
-`internal/agent/agent.go:339` — Raw user messages (which may contain passwords, API keys) logged verbatim to audit trail. No PII/secret redaction.
+**C-13 — No provider attribution (LOW).** Audit entries do not record which backend (inferd vs openai-compat) served a request, hampering post-incident tracing if configuration changes.
 
 ### Layer 6: Security & Compliance
 
-**T9 — WMCP Identity Spoofing (CRITICAL)**
-`internal/connect/wmcp.go:160-180` — WMCP envelope `email` and `PersonID` fields come directly from the relay server with no cryptographic proof. A compromised or malicious WMCP backend can forge messages as any authorized user, bypassing the email allowlist.
+**N-1 (cross-listed)** — the openai-compat TLS gap is equally an L6 secrets/identity issue: the bearer key can transit cleartext.
 
-**T24 — Dangerous Command Pattern Gaps (MEDIUM)**
-`internal/security/dangerous.go:26-69` — Missing patterns for: kernel module loading (`insmod`, `modprobe`), container escapes (`docker run --privileged`), scheduled execution (`crontab -`), env injection (`LD_PRELOAD`), and binary path variants (`/bin/rm`).
+**Challenge-response — verified sound.** `challenge.go` uses AES-256-GCM over a scrypt-derived key, keyed by `spaceID`, with `challengeTTL = 2 * time.Minute` and `maxChallengeAttempts = 3` brute-force lockout. (The ungrounded "5-minute TTL / no lockout" claims were false and dropped.)
 
-**T3 — No Per-Request Token Re-validation (MEDIUM)**
-`internal/connect/native.go:61-115`, `internal/connect/wmcp.go:60-95` — Authentication is performed once at connection establishment. No per-request validation. If the token is revoked, existing connections continue operating indefinitely.
+**Allowlist — enforced before handling.** The email allowlist is applied in the connect layer (`native.go` `IsAllowedInRoom`) before `messageHandler` runs, strict in group rooms (empty list = deny all). Passthrough does not relax this.
+
+**VCS hygiene (.gitignore audit).** Derived from `git ls-files` ∩ root `.gitignore` (authoritative recon):
+
+| Check | Result |
+|---|---|
+| `.gitignore` exists at root | ✅ |
+| Secrets: `.env`, `.env.*`, `config.yaml`/`.yml` ignored | ✅ (with intentional `!config/config.example.yaml`) |
+| Secrets: `*.pem` / `*.key` / `*.p12` / `*.pfx` / `*.jks` / `credentials*` | ⚠️ **Missing** — a generated key/cert would not be ignored (T22, low: no such files are currently tracked) |
+| Audit logs `*.jsonl` ignored | ✅ |
+| Build artifacts (binaries, `dist/`, `bin/`, `vendor/`) | ✅ |
+| IDE (`.idea/`, `.vscode/`, `*.swp`) | ✅ |
+| Secret-bearing file tracked in git? | ❌ none — `config.example.yaml` contains only `${ENV}` placeholders (verified) |
+
+*Mitigation (low)*: add `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.crt`, `credentials*`, `*secret*` to `.gitignore` as a defense-in-depth measure.
 
 ### Layer 7: Agent Ecosystem
 
-**T13/T36 — No Installer Checksum Verification (CRITICAL)**
-`install.sh:95-113`, `install.ps1:65-92` — Installers download binaries from GitHub Releases via HTTPS but do not verify SHA256 checksums against `CHECKSUMS.txt`. A compromised release or MITM can install malicious binaries system-wide.
+**N-2 — Rogue/compromised openai-compat endpoint (HIGH).** With openai-compat, RemoteClaw treats an operator-configured remote host as the reasoning brain. A malicious or hijacked endpoint (or MITM enabled by N-1) can return crafted `tool_use` calls that drive local execution. **Bounded** by three downstream controls: `executor.dispatch` rejects unknown tool names, the dangerous-command checker gates `execute_command`, and challenge-response gates blocked commands. Residual risk: any checker-clean command the endpoint induces will run. *Mitigation*: restrict `openai_base_url` to organization-controlled endpoints; prefer local inferd for sensitive hosts; enforce TLS (N-1).
 
-**T13/T36 — Release Artifacts Not Code-Signed (CRITICAL)**
-`.github/workflows/release.yml:80-88` — Release workflow generates checksums but does not GPG-sign them. An attacker can replace both binary and checksum simultaneously.
+**Supply-chain governance (MEDIUM, informational).** `go.mod` pins `github.com/3rg0n/inferd/clients/go` to a **pseudo-version commit** (`v0.0.0-…-59d33b172d49`), not a signed release tag, because upstream publishes no `clients/go/` submodule tags (tracked as inferd issue #48). No SBOM or license-audit step in CI. *Mitigation*: pin to a signed release tag once available; add SBOM generation.
 
-**T9 — WMCP Non-TLS Only Warns (HIGH)**
-`internal/connect/wmcp.go:42-46` — Should be a hard failure, not a warning.
-
-**T39 — No LLM Token Budget (HIGH)**
-`internal/ai/bedrock.go:36-98` — No per-minute token tracking, no monthly cost budget, no auto-shutdown at threshold. Frequent queries can cause unbounded AWS Bedrock costs.
-
-**T13 — Missing SBOM (MEDIUM)**
-No Software Bill of Materials generated or published with releases. No automated license compliance audit.
-
-**T15 — AI Output Not Validated (MEDIUM)**
-`internal/agent/agent.go:312-346` — AI responses sent directly to users without verification. The AI could hallucinate system state or fabricate command results.
-
-**T25 — Ollama Single Point of Failure (MEDIUM)**
-`internal/ai/ollama.go:21-49` — No fallback if Ollama is unreachable. Agent becomes unresponsive.
+**C-5 — WMCP `ws://` only warns (HIGH).** `internal/connect/wmcp.go:43-45` logs a warning when the endpoint is not `wss://` but proceeds to dial, sending the WMCP auth token in cleartext. *Mitigation*: reject non-`wss://` endpoints.
 
 ## Agent/Skill Integrity
 
-*No agent/skill definitions, MCP configs, or hook definitions found in the codebase. Agent Integrity Auditor not applicable.*
+RemoteClaw's "agent definition" is its system prompt (`internal/ai/prompt.go`) plus the granted tool set (`internal/ai/tools.go`) and project instructions (`CLAUDE.md`). No `.claude/` agent YAML or MCP config exists. The Integrity audit (grounded, 11 tool calls) found **no misalignment**:
+
+| File | Type | Declared Intent | Misalignment | ASI Threat | Severity | Observable |
+|------|------|-----------------|--------------|------------|----------|------------|
+| internal/ai/prompt.go + tools.go | System prompt + tools | "system administration agent" | None — sysadmin role ↔ sysadmin tools, capabilities explicitly disclosed (prompt lines 15-23), mandatory safety constraints stated (lines 25-34) | — (aligned) | Info | Yes |
+| internal/agent/agent.go (passthrough) | Execution mode | Webex-as-SSH for a remote AI (ADR 0002) | Scope is disclosed and gated; not hidden (MA-4 considered, not upheld) | T7 (residual) | Low | Yes (audit-logged) |
+| internal/service/manager.go | Service install | Install/uninstall service | None — standard kardianos/service, no hidden persistence | — | Info | Yes |
 
 ## Dependency CVEs
 
-Scanned with: `govulncheck v1.1.4` (database: vuln.go.dev, 2026-04-02)
+| Package | Version | CVE | CVSS | Fixed In | Reachable | Risk |
+|---------|---------|-----|------|----------|-----------|------|
+| _(none affecting code)_ | — | — | — | — | — | — |
 
-| Package | Version | CVE / Advisory | Severity | Fixed In | Code Path Used | Risk |
-|---------|---------|----------------|----------|----------|----------------|------|
-| `github.com/ollama/ollama` | v0.18.2 | GO-2025-4251 (Missing Auth for Model Mgmt) | HIGH | N/A (unfixed) | Yes — `ollama.go:33,57,63,71,123` | High |
-| `github.com/ollama/ollama` | v0.18.2 | GO-2025-3824 (Cross-Domain Token Exposure) | HIGH | N/A (unfixed) | Yes — all Ollama client calls | High |
-| `github.com/ollama/ollama` | v0.18.2 | GO-2025-3548 (DoS via Crafted GZIP) | MEDIUM | N/A (unfixed) | Yes — `ollama.go:71,123` | Medium |
-
-**Note:** All three Ollama CVEs have no fixed version in any released Ollama module. The latest available is v0.20.2 but govulncheck confirms these remain unpatched. Mitigate by restricting Ollama network access to loopback only.
-
-All other Go dependencies (AWS SDK, zerolog, cobra, viper, websocket, etc.) are free of known vulnerabilities.
+*Scanned with: `govulncheck ./...` — 0 vulnerabilities in reachable code. `go-jose/go-jose/v4` was upgraded to v4.1.4 in PR #1, remediating GO-2026-4945 (the finding present in the prior model).*
 
 ## Recommended Mitigations (Priority Order)
 
-### P0 — Critical (Fix Before Production)
-
-1. **Implement prompt injection defense** — Wrap user input in `<user_input>` XML delimiters; add explicit system prompt reinforcement; sanitize/escape tool outputs before feeding back to LLM. Files: `processor.go`, `prompt.go`
-
-2. **Replace execute_command with command allowlist** — Instead of allowing arbitrary shell commands with a denylist, restrict to a curated set of safe commands or require structured arguments (no shell interpretation). Files: `tools.go`, `command.go`, `executor.go`
-
-3. **Add cryptographic WMCP message authentication** — Require HMAC-SHA256 signatures on all WMCP envelopes. Reject non-TLS endpoints as hard failure. Files: `wmcp.go`, `wmcp_messages.go`
-
-4. **Implement installer checksum verification** — Download `CHECKSUMS.txt`, verify SHA256 of binary before installation. Files: `install.sh`, `install.ps1`
-
-5. **Sign release artifacts with GPG** — Add GPG signing step to CI/CD. Publish public key. File: `release.yml`
-
-### P1 — High (Fix in Next Sprint)
-
-6. **Re-validate dangerous commands in ForceExecuteCommand** — Run the dangerous checker again before confirmed execution. Add brute-force attempt limit (max 3 failures per challenge). Files: `executor.go`, `challenge.go`
-
-7. **Resolve symlinks before file path validation** — Use `filepath.EvalSymlinks()` in `isSensitivePath()`. Apply sensitive path check to read operations too. File: `filesystem.go`
-
-8. **Log full tool parameters and results in audit trail** — Extend `AuditEntry` struct to include tool inputs, outputs, and AI reasoning. File: `audit.go`, `agent.go`
-
-9. **Enforce mandatory audit logging** — Error out if `security.audit_log` is empty. Add HMAC hash chain for tamper evidence. Files: `config.go`, `audit.go`
-
-10. **Add root privilege check at startup** — Refuse to run as root/Administrator unless explicitly overridden. File: `agent.go`, `main.go`
-
-11. **Add Ollama model checksum verification** — Verify model digest after pull. Pin expected model hash in config. File: `ollama.go`
-
-12. **Implement LLM token/cost budget** — Track tokens per request and per day. Auto-pause at configurable threshold. Files: `bedrock.go`, `agent.go`
-
-### P2 — Medium (Plan for Next Release)
-
-13. **Expand dangerous command patterns** — Add: kernel module ops, container escapes, scheduled tasks, env injection, binary path variants, command substitution.
-14. **Add global rate limit** — System-wide concurrent command cap across all spaces.
-15. **Implement circuit breaker** — Global timeout per message, exponential backoff on tool errors, max token budget per interaction.
-16. **Add secret scrubbing to audit logs** — Regex-based redaction of API keys, tokens, passwords before logging.
-17. **Implement security alerting** — Webhook/syslog notifications for dangerous command blocks, challenge confirmations, and rate limit events.
-18. **Pin CI/CD actions to commit SHAs** — Replace `@v4`/`@v5` tags with full commit hashes.
-19. **Generate and publish SBOM** — Add CycloneDX or SPDX SBOM generation to release workflow.
-20. **Add per-request token re-validation** — Periodically re-authenticate Webex/WMCP connections.
-
-### P3 — Low (Hardening)
-
-21. Reduce default `max_read_bytes` from 1MB to 64KB.
-22. Log Bedrock deserialization failures at WARN level.
-23. Add conversation history TTL cleanup for stale spaces.
-24. Implement AI provider fallback (Ollama → Bedrock or vice versa).
-25. Cap temperature at 0.3 for security consistency.
+1. **Enforce TLS on `openai_base_url` (N-1).** In `config.Validate()`, reject non-`https://` base URLs for non-loopback hosts; allow `http://` only for localhost. Closes cleartext key/conversation exposure and the easiest MITM path into tool execution.
+2. **Constrain the remote-endpoint trust boundary (N-2).** Document that openai-compat trusts the endpoint as the reasoning brain; recommend org-controlled endpoints and local inferd for sensitive hosts. Keep the `dispatch` allowlist as the backstop.
+3. **Run as a dedicated low-privilege user (C-3).** Ship install guidance/defaults for a non-root service account; consider seccomp/AppArmor (Linux) or a restricted service account (Windows).
+4. **Scrub secrets from `ToolInputs` in the audit log (N-3).** Apply `scrubSecrets` to each element before writing.
+5. **Extend the dangerous-command/policy gate beyond `execute_command` (C-6).** Apply capability checks to `write_file` and `kill_process`.
+6. **Reject `ws://` for WMCP (C-5)** and add tamper-evidence to audit logs (C-4).
+7. **Validate `inferd_socket` (N-5)**, restrict the health bind address to loopback (C-7), and sign release artifacts (C-8).
+8. **Hardening backlog**: `.gitignore` key/cert patterns, provider attribution + explicit `Blocked` flag in audit (N-6, C-13), env-var expansion allowlist (C-9), per-iteration loop timeout (C-10).
 
 ## Trust Boundaries
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│ UNTRUSTED ZONE                                                    │
-│                                                                    │
-│  Webex Users ──── Webex Cloud ──── Mercury WebSocket ─┐           │
-│                                                        │           │
-│  WMCP Relay ──── WebSocket ──────────────────────────┐│           │
-│                                                       ││           │
-├───────────────────────────────────────────────────────┼┼──────────┤
-│ TRUST BOUNDARY: Network → Agent Process               ││           │
-├───────────────────────────────────────────────────────┼┼──────────┤
-│ AGENT PROCESS (RemoteClaw)                            ▼▼           │
-│                                                                    │
-│  ┌─────────┐    ┌──────────┐    ┌───────────┐                    │
-│  │Allowlist │───▶│  Agent   │───▶│ Security  │                    │
-│  │(email)  │    │Orchestr. │    │(rate limit,│                    │
-│  └─────────┘    └────┬─────┘    │ dangerous, │                    │
-│                      │          │ challenge) │                    │
-│                      ▼          └─────┬──────┘                    │
-│              ┌───────────┐            │                            │
-│              │ AI Engine │            │                            │
-│              │(Processor)│            │                            │
-│              └─────┬─────┘            │                            │
-│                    │                  │                            │
-├────────────────────┼──────────────────┼───────────────────────────┤
-│ TRUST BOUNDARY: Agent → LLM Provider  │                            │
-├────────────────────┼──────────────────┼───────────────────────────┤
-│                    ▼                  │                            │
-│  ┌──────────────────────┐            │                            │
-│  │ Bedrock / Ollama     │            │                            │
-│  │ (model inference)    │            │                            │
-│  └──────────┬───────────┘            │                            │
-│             │ tool calls              │                            │
-│             ▼                         ▼                            │
-├────────────────────────────────────────────────────────────────────┤
-│ TRUST BOUNDARY: Agent → Local OS                                   │
-├────────────────────────────────────────────────────────────────────┤
-│ LOCAL OPERATING SYSTEM                                             │
-│                                                                    │
-│  ┌──────────────────────────────────────────────┐                 │
-│  │ Executor: shell, filesystem, processes, info │                 │
-│  │ (runs with full agent process privileges)    │                 │
-│  └──────────────────────────────────────────────┘                 │
-│                                                                    │
-│  ┌──────────────┐  ┌───────────┐  ┌────────────┐                 │
-│  │ Audit Logs   │  │ Config    │  │ .env File  │                 │
-│  │ (NDJSON)     │  │ (YAML)    │  │ (secrets)  │                 │
-│  └──────────────┘  └───────────┘  └────────────┘                 │
-└──────────────────────────────────────────────────────────────────┘
-```
+1. **Webex user → RemoteClaw** — authenticated by bot token; authorized by email allowlist (strict in group rooms). Untrusted input crosses here.
+2. **RemoteClaw → inference backend** — *new/changed*. For inferd: a local IPC socket (trusted daemon, but the socket path is an integrity boundary — N-5). For openai-compat: an outbound HTTP call to an operator-configured, cryptographically-unverified remote host — the **most significant new trust boundary** (N-1, N-2).
+3. **Inference backend → executor** — model/endpoint output crosses into command execution; gated by the dispatch allowlist + dangerous checker + challenge-response. Passthrough removes the model from this edge but keeps the deterministic gates.
+4. **RemoteClaw → operating system** — runs as a system service (often root/SYSTEM), executing shell commands (C-1, C-3).
+5. **RemoteClaw ↔ WMCP relay** (optional) — token-authenticated; cleartext if `ws://` (C-5).
 
 ## Data Flow Diagram (Text)
 
-```mermaid
-graph TD
-    A[Webex User] -->|Message via Mercury WS| B[Connect Layer]
-    A2[WMCP Relay] -->|Message via WebSocket| B
-
-    B -->|IncomingMessage| C{Allowlist Check}
-    C -->|Denied| D[Reject]
-    C -->|Allowed| E{Rate Limiter}
-    E -->|Exceeded| F[Rate Limited Response]
-    E -->|Allowed| G{Challenge Check}
-    G -->|Is Confirmation| H[ForceExecuteCommand ⚠️ No Danger Check]
-    G -->|Normal Message| I[AI Processor]
-
-    I -->|User msg + history| J[LLM: Bedrock / Ollama]
-    J -->|Text response| K[Send to User via Webex]
-    J -->|Tool call| L{Dangerous Checker}
-    L -->|Blocked| M[Challenge-Response]
-    M -->|Encrypted challenge| K
-    L -->|Allowed| N[Executor]
-
-    N -->|execute_command| O[Shell: sh -c / powershell]
-    N -->|read_file| P[os.Open ⚠️ No Sensitive Check]
-    N -->|write_file| Q[os.WriteFile + Sensitive Check]
-    N -->|list_dir / list_processes / kill_process / system_info| R[OS Operations]
-
-    O -->|stdout/stderr| S[Tool Result ⚠️ Unescaped]
-    P -->|file content| S
-    Q -->|status| S
-    R -->|output| S
-
-    S -->|Fed back to LLM| J
-    S -->|Final response| K
-
-    I -->|Audit Entry| T[Audit Logger ⚠️ No Tool Params]
-    T -->|NDJSON| U[Audit File ⚠️ No HMAC]
-
-    style H fill:#ff6666
-    style S fill:#ffaa00
-    style P fill:#ffaa00
-    style T fill:#ffaa00
-    style U fill:#ffaa00
 ```
-
----
-
-*Generated by MAESTRO Threat Model analysis on 2026-04-06. Framework: OWASP MAS Threat Modelling Guide v1.0 + CSA MAESTRO.*
+                          TRUST BOUNDARY 1
+   Webex user  ── message ──▶ [allowlist + rate limit] ──▶ messageHandler
+   (untrusted)                                                   │
+                                                 ┌───────────────┴───────────────┐
+                                        interpret│                                │passthrough
+                                                 ▼                                ▼
+                                        AI Processor loop                 handlePassthrough
+                                                 │                                │
+                        TRUST BOUNDARY 2 (NEW)   │  Converse()                    │
+                    ┌────────────────────────────┴───────────┐                    │
+                    ▼                                         ▼                    │
+            inferd daemon                          openai-compat endpoint          │
+        (local UDS / named pipe)              (REMOTE HTTP, operator URL,          │
+         [socket path = N-5]                   no TLS enforcement = N-1,           │
+                    │                            rogue endpoint = N-2)             │
+                    └────────────┬────────────────────────────┘                    │
+                                 ▼  tool_use calls                                  │
+                          TRUST BOUNDARY 3                                          │
+                    [dispatch allowlist + dangerous checker + challenge-response]◀──┘
+                                 │  (same executeToolGuarded for both paths)
+                                 ▼
+                          TRUST BOUNDARY 4
+                    Executor ──▶ OS shell / filesystem / processes
+                    (service often runs as root/SYSTEM = C-3, C-1)
+                                 │
+                                 ▼
+                    Audit log (NDJSON) ── ToolInputs unscrubbed = N-3;
+                                          no tamper protection = C-4
+```

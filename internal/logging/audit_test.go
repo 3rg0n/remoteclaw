@@ -144,6 +144,34 @@ func TestAuditLogger_LogWithError(t *testing.T) {
 	assert.Equal(t, "command not recognized", logEntry["error"])
 }
 
+func TestAuditLogger_ScrubsToolInputs(t *testing.T) {
+	tmpDir := t.TempDir()
+	basePath := filepath.Join(tmpDir, "audit")
+
+	logger, err := NewAuditLogger(basePath)
+	require.NoError(t, err)
+	require.NotNil(t, logger)
+	defer func() { _ = logger.Close() }()
+
+	// A tool input embedding a secret must be redacted, like RawMessage/Response.
+	logger.Log(AuditEntry{
+		Timestamp:  time.Now(),
+		Email:      "user@example.com",
+		SpaceID:    "space123",
+		RawMessage: "run it",
+		ToolCalls:  []string{"execute_command"},
+		ToolInputs: []string{`execute_command(command="curl -H \"authorization: Bearer sk-supersecret123\" x")`},
+		Response:   "ok",
+		Duration:   time.Millisecond,
+	})
+
+	content, err := os.ReadFile(todayFile(basePath)) //nolint:gosec // test path
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(content), "sk-supersecret123", "secret in tool input must be scrubbed")
+	assert.Contains(t, string(content), "[REDACTED]", "scrubbed marker should be present")
+}
+
 func TestAuditLogger_Close(t *testing.T) {
 	tmpDir := t.TempDir()
 	basePath := filepath.Join(tmpDir, "audit")
