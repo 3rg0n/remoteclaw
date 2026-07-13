@@ -1,0 +1,148 @@
+internal/agent/agent.go
+  s_fb340f953812c6::t_933b6d306b26b7 10
+  s_fb340f953812c6::t_52b16f2c5419d6 174-197
+  s_fb340f953812c6::t_2a5477320309a2 75-86
+internal/secrets/pass_test.go
+  s_fb340f953812c6::t_0e9c69d56583fd 1-279
+CHANGELOG.md
+  s_fb340f953812c6::t_b5d0e0aa72495e 11-14
+  s_9ce76b99a6b72f::t_eaf50bff494c5c 15-24
+install.ps1
+  s_fb340f953812c6::t_103ce8856a09ab 312-313,322-324,328-330,337
+  s_fb340f953812c6::t_c5d822e694fd21 363-367
+  s_fb340f953812c6::t_e32cf9928588a7 208-217,219,231-233,235,238
+  s_fb340f953812c6::t_5263d98d31b2ca 154-158,161-174,176-178,181-182,185-195
+  s_fb340f953812c6::t_dfa541e0f8222d 198,206-207,218,220-230,234,236-237,239
+  s_fb340f953812c6::t_6613c1082b05cf 255-258,272-276,278,283-285
+  s_fb340f953812c6::t_271abeff6418aa 254,259-260,262-265,267-271,277,279-280
+  s_3cf8ea5d0bfcf3::t_3a53417d7c8b37 282
+docs/adr/0004-privilege-separated-executor.md
+  s_fb340f953812c6::t_bc5e65a708391c 1-73
+internal/logging/audit_test.go
+  s_fb340f953812c6::t_ebc8f43ca482ff 147-174
+internal/executor/guard.go
+  s_fb340f953812c6::t_64030508cdb905 118-123
+  s_fb340f953812c6::t_4acc874a7f3c9d 132-137
+  s_fb340f953812c6::t_96946453a8ca9b 1-117,124-131,138-154
+internal/executor/executor_test.go
+  s_fb340f953812c6::t_f128ae0f78dfda 111-113,116
+internal/logging/audit.go
+  s_fb340f953812c6::t_d96afde69db023 100,103
+  s_fb340f953812c6::t_78a639b584e145 161-167
+  s_fb340f953812c6::t_fcf44a72485858 28-37
+  s_fb340f953812c6::t_9b959055a5e0cb 95-99,101-102,109-110
+internal/executor/guard_test.go
+  s_fb340f953812c6::t_75141e63b7ce0c 30-31,33
+  s_fb340f953812c6::t_6b35375785f67e 1-29,32,34-121
+internal/config/config_test.go
+  s_fb340f953812c6::t_1e7b6d71e6d754 9
+  s_3f706e3f4b4643::t_b2dcdab251e951 621-727
+internal/secrets/secrets.go
+  s_fb340f953812c6::t_b5092e5868e3d5 1-8,12-40
+  s_fb340f953812c6::t_fb98cfa181e3d3 9-11
+internal/secrets/pass.go
+  s_fb340f953812c6::t_1ef145ee415eb2 44
+  s_fb340f953812c6::t_cb9825699bc5b2 1-43,45-89,94-111,114-136
+  s_fb340f953812c6::t_94f18b30f81080 90-92
+  s_fb340f953812c6::t_2d772e1f1d7fda 93
+  s_fb340f953812c6::t_fd9ebb395af2a6 112-113
+internal/config/config.go
+  s_fb340f953812c6::t_4bbf5aed84fe59 9-10
+  s_fb340f953812c6::t_e36e50fe789914 105-110,216-217
+  s_fb340f953812c6::t_63899f54a100ac 235
+  s_fb340f953812c6::t_e1f7e270dc2ca0 6
+  s_fb340f953812c6::t_b464da4c85ac4f 32-36
+  s_fb340f953812c6::t_db108f489e9644 149-151,178,180,188,193,195,200-215
+  s_fb340f953812c6::t_f68b8a1c2662b0 152-156,165-177,179,181-187,189-192,194,196-199
+cmd/remoteclaw/main.go
+  s_fb340f953812c6::t_e27824aa7c09e7 79,102
+  s_fb340f953812c6::t_f8d38da441167b 212-230
+  s_fb340f953812c6::t_21e495318e2c69 41
+  s_fb340f953812c6::t_b7367130632379 27-29
+  s_fb340f953812c6::t_f911185c50715d 124-125
+  s_fb340f953812c6::t_e629c8e7c9adb5 11
+  s_fb340f953812c6::t_0d4c33a34ffcaa 17
+docs/adr/0003-secret-storage-and-config-lockdown.md
+  s_fb340f953812c6::t_d1cd9e96022584 1-82
+THREAT_MODEL.md
+  s_fb340f953812c6::t_1737691f866a2c 4,10,15-31,36,38,40-42,46-47,50,53-76,84,86,88,90,92,96,98,102,104,106,108,112,114,116,118,120,124,126,128,132,134,136,138,140-148,150,152,154,156,158,162,164-168,170,172-174,176,180-187,191-195,200-228
+  s_fb340f953812c6::t_9506191afd3e10 77-78
+  s_fb340f953812c6::t_aa7e0bde2ec04b 12-14
+  s_fb340f953812c6::t_5e8bd8e4ab961b 51-52
+  s_15b6464673ef8b::t_db452e945e75c0 11
+install.sh
+  s_fb340f953812c6::t_ce087eefafe2a7 265,403-409
+  s_fb340f953812c6::t_5a49d3b08cc36c 343-347,356-358,362-364,371,389-390,397
+  s_fb340f953812c6::t_d8671420af5ac1 238-264
+  s_fb340f953812c6::t_c7c424223f8ad5 151-155,158
+  s_fb340f953812c6::t_9dfed782902cea 391-396
+  s_fb340f953812c6::t_4dfe677a401f00 271-278,280-285,287-289
+  s_fb340f953812c6::t_2c0f9a32c3d37d 270,279,286,290-295,298-301,307-308,310
+  s_fb340f953812c6::t_1483a80d14f1ce 302-306
+  s_9b8d68f5aabdc1::t_4b2f3549469eff 179-187,190-201,205-228,231,237
+internal/executor/executor.go
+  s_fb340f953812c6::t_02784decedf767 20-24,44-50,68-88,105-124
+internal/service/manager.go
+  s_fb340f953812c6::t_9e6d9139a4d622 75-78
+  s_fb340f953812c6::t_2e795e176bcdff 17
+config/config.example.yaml
+  s_9b8d68f5aabdc1::t_276397641ad2a1 57-74
+docs/adr/README.md
+  s_3f706e3f4b4643::t_d1e4a778483ebc 15-16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "33d4bcbf96287d27ac518ba34778e48cc6214e30",
+  "prompts": {},
+  "sessions": {
+    "s_15b6464673ef8b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0488aaa5-b1a9-4922-a6c3-1bef91271e93",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_3cf8ea5d0bfcf3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ce51b4c8-7e44-4cf3-ac8c-12f111e0816f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_9b8d68f5aabdc1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7333820e-bccc-4f3b-9eb9-50e606acc9ac",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_9ce76b99a6b72f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "150a4550-9410-495d-92c2-2ab0b3a9cd90",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    }
+  }
+}
