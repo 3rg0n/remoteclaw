@@ -1,0 +1,72 @@
+cmd/remoteclaw/main.go
+  s_fb340f953812c6::t_a0006e70d397f7 133-134
+  s_fb340f953812c6::t_d1a7ba201b8329 213-214
+  s_fb340f953812c6::t_8e32f57027c6a5 18
+  s_fb340f953812c6::t_dd85217a0a05fb 96-102,110
+  s_fb340f953812c6::t_02c38501d05dd3 138-165,167,169,171,188-189,193,195,198
+  s_fb340f953812c6::t_bc5e60532cf63b 82
+internal/service/manager_test.go
+  s_fb340f953812c6::t_fc8103b17e8ad9 4,12-13,16,32,44,58,70-93
+  s_15b6464673ef8b::t_38356fff2d14a1 94
+install.sh
+  s_fb340f953812c6::t_7c5dd82b2b1360 72,78,80-85,246,260,425,429,462,533,540
+  s_fb340f953812c6::t_448928a02819b9 86,91
+  s_fb340f953812c6::t_0c073279b59d7e 94
+  s_fb340f953812c6::t_f1090b0122f6af 5-6
+  s_fb340f953812c6::t_45c9d781fc56a9 55-65,67-70,242,292,471,539
+  s_fb340f953812c6::t_16053cd9959f0d 7-8,12-13
+  s_3f706e3f4b4643::t_2a1e7dcdab6a98 243-245,259,261-271,273-291,300-302,306-308,314-316,327-332,396,414-419,426-428,430,433-436,463-470,472-479,481-494,499-522,525-526,534-538,555
+install.ps1
+  s_fb340f953812c6::t_d53abdca6a159e 9
+  s_fb340f953812c6::t_d162c953368066 23-24
+  s_ca971a8fd79b6b::t_f52ddce113c12d 164-165,189-190,194,206-208,217-221,225-229,236,253-256,260-264,271,277-278,307-308,329,333,354,356-357,359-378,382,389-390,392-399,402,412-413,417-423,429-432,454-455
+internal/service/manager.go
+  s_fb340f953812c6::t_66ff0d72ebc925 72-81,93-99,110-115
+  s_fb340f953812c6::t_f533de758b10d9 6,11-26,29-35
+README.md
+  s_15b6464673ef8b::t_9edc8eab0c8846 162,168-181
+docs/adr/0004-privilege-separated-executor.md
+  s_15b6464673ef8b::t_808507d3886241 88-92
+CHANGELOG.md
+  s_fb340f953812c6::t_e238124f7aa55d 58-63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "80e8ea6fde80a737387e6f6b1889dd283f165721",
+  "prompts": {},
+  "sessions": {
+    "s_15b6464673ef8b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0488aaa5-b1a9-4922-a6c3-1bef91271e93",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_ca971a8fd79b6b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "agent-aa85218abfa125d68",
+        "model": "unknown"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    }
+  }
+}
