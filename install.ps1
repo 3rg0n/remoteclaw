@@ -6,7 +6,7 @@ $ErrorActionPreference = "Stop"
 $Repo        = "3rg0n/remoteclaw"
 $ReleaseUrl  = "https://github.com/$Repo/releases/latest/download"
 
-$InstallDir  = "C:\ProgramData\remoteclaw"
+$InstallDir  = "$env:LOCALAPPDATA\RemoteClaw"
 $BinPath     = "$InstallDir\remoteclaw.exe"
 $ConfigPath  = "$InstallDir\config.yaml"
 $EnvPath     = "$InstallDir\.env"
@@ -20,6 +20,8 @@ function Write-Warn  { param($m) Write-Host "[warn]  $m" -ForegroundColor Yellow
 function Write-Err   { param($m) Write-Host "[error] $m" -ForegroundColor Red }
 
 # --- Check admin elevation -------------------------------------------------
+# On Windows, Scheduled Task registration doesn't always require admin, but we check
+# so the installer can create per-user directories and set permissions if needed.
 
 function Assert-Admin {
     $principal = New-Object Security.Principal.WindowsPrincipal(
@@ -159,7 +161,8 @@ function Get-UserConfig {
     $script:ChallengeEncrypted = ""
 
     if ($enableChallenge -notmatch '^[nN]' -and $enableChallenge -ne "") {
-        $passphrase = Read-Host "  Challenge passphrase (will be encrypted)" -AsSecureString
+        Write-Host "  Enter challenge passphrase (will be encrypted, then never stored):"
+        $passphrase = Read-Host "  Passphrase" -AsSecureString
         $passphraseText = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto([System.Runtime.InteropServices.Marshal]::SecureStringToCoTaskMemUnicode($passphrase))
 
         if ($passphraseText) {
@@ -183,11 +186,12 @@ function Get-UserConfig {
     }
 
     # Store secrets location (pass not typical on Windows; default to .env with note)
-    Write-Info "Secrets will be stored in plaintext .env file. For production, consider using an external secret store."
+    Write-Warn "Secrets will be stored in plaintext .env file (best-effort in-process guard per ADR 0004)."
+    Write-Info "For production, consider using an external secret store or running in a VM/container."
     $script:UsePass = $false
 
     # Lockdown mode (default Y)
-    $enableLockdown = Read-Host "  Lock down config & secrets? [Y/n]"
+    $enableLockdown = Read-Host "  Restrict config/secrets to current user via file ACLs? [Y/n]"
     if ($enableLockdown -notmatch '^[nN]' -and $enableLockdown -ne "") {
         $script:LockdownEnabled = $true
     } else {
@@ -199,6 +203,9 @@ function Get-UserConfig {
 
 function New-Directories {
     Write-Info "Creating directories…"
+    if (-not (Test-Path $InstallDir)) {
+        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    }
     if (-not (Test-Path $LogDir)) {
         New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
     }
@@ -207,35 +214,26 @@ function New-Directories {
     if ($script:LockdownEnabled) {
         Write-Info "Applying lockdown ACLs to config directory…"
 
-        # The service runs as LocalService (see Install-RemoteClawService) and MUST
-        # read its own config at startup, so LocalService is granted READ — not
-        # denied. Inheritance is disabled and the broad "Users" group gets no
-        # entry, so ordinary accounts on the box cannot read config/secrets.
-        # Modifying settings requires Administrators = local admin. The agent's
-        # OWN tools are denied by the in-process guard; making config unreadable
-        # to the agent's own process via any command needs the privilege-separated
-        # executor tracked in ADR 0004.
+        # RemoteClaw runs in the current user's session (per ADR 0004). Lockdown
+        # restricts the directory to the current user + Administrators, disabling
+        # inheritance so other local users cannot read config/secrets. The agent's
+        # own tools are guarded by the in-process defense-in-depth layer.
+        $currentUser = "$env:USERDOMAIN\$env:USERNAME"
         $acl = New-Object System.Security.AccessControl.DirectorySecurity
         $acl.SetAccessRuleProtection($true, $false)  # disable inheritance, drop inherited ACEs
+
+        $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $currentUser, "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
+        )
+        $acl.AddAccessRule($userRule)
 
         $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
             "Administrators", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
         )
         $acl.AddAccessRule($adminRule)
 
-        $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "NT AUTHORITY\SYSTEM", "FullControl", "ContainerInherit,ObjectInherit", "None", "Allow"
-        )
-        $acl.AddAccessRule($systemRule)
-
-        # Grant the service account READ so the service can start.
-        $svcRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "NT AUTHORITY\LocalService", "ReadAndExecute", "ContainerInherit,ObjectInherit", "None", "Allow"
-        )
-        $acl.AddAccessRule($svcRule)
-
         Set-Acl -Path $InstallDir -AclObject $acl
-        Write-Ok "Config directory restricted: Administrators + service account only."
+        Write-Ok "Config directory restricted to current user + Administrators."
     }
 }
 
@@ -252,37 +250,32 @@ function New-EnvFile {
     $lines -join "`r`n" | Set-Content -Path $EnvPath -Encoding UTF8 -Force
 
     if ($script:LockdownEnabled) {
-        # Administrators + SYSTEM full control; the LocalService service account
-        # gets READ so the service can load its token at startup. Inheritance is
-        # disabled and no entry is granted to Users, so ordinary accounts cannot
-        # read the token. The agent's own tools are denied by the in-process guard.
+        # Restrict .env to current user + Administrators. Inheritance disabled,
+        # no entry granted to other users. The agent's own tools are denied by
+        # the in-process guard (ADR 0004).
+        $currentUser = "$env:USERDOMAIN\$env:USERNAME"
         $acl = New-Object System.Security.AccessControl.FileSecurity
         $acl.SetAccessRuleProtection($true, $false)
+
+        $userRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $currentUser, "FullControl", "Allow"
+        )
+        $acl.AddAccessRule($userRule)
 
         $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
             "Administrators", "FullControl", "Allow"
         )
         $acl.AddAccessRule($adminRule)
 
-        $systemRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "NT AUTHORITY\SYSTEM", "FullControl", "Allow"
-        )
-        $acl.AddAccessRule($systemRule)
-
-        $svcRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
-            "NT AUTHORITY\LocalService", "Read", "Allow"
-        )
-        $acl.AddAccessRule($svcRule)
-
         Set-Acl $EnvPath $acl
-        Write-Ok "Created $EnvPath (Administrators + service-account ACL)"
+        Write-Ok "Created $EnvPath (current user + Administrators ACL)"
     } else {
         Write-Ok "Created $EnvPath"
     }
 
     # Note: CHALLENGE is intentionally NOT persisted to a machine environment
-    # variable — the challenge ciphertext lives in .env (read by the service).
-    # The passphrase is never stored (see ADR 0003).
+    # variable — the challenge ciphertext lives in .env (read by the task).
+    # The passphrase is never stored.
 }
 
 # --- Generate config.yaml --------------------------------------------------
@@ -311,6 +304,8 @@ function New-ConfigFile {
 
     $lockdownValue = if ($script:LockdownEnabled) { "true" } else { "false" }
 
+    $logPath = $LogDir -replace '\\', '\\'  # Escape backslashes for YAML
+
     $configContent = @"
 mode: native
 
@@ -331,10 +326,11 @@ ai:
 
 security:
   dangerous_commands: true
-  audit_log: "$LogDir\audit"
+  audit_log: "$logPath\audit"
   rate_limit_per_min: 10
 $challengeLine
   lockdown: $lockdownValue
+  protected_paths: []
 
 execution:
   default_timeout: "30s"
@@ -355,35 +351,55 @@ health:
     Write-Ok "Created $ConfigPath"
 }
 
-# --- Install service -------------------------------------------------------
+# --- Install scheduled task ------------------------------------------------
 
-function Install-RemoteClawService {
-    Write-Info "Installing RemoteClaw as a system service…"
+function Install-RemoteClawTask {
+    Write-Info "Registering RemoteClaw as a per-user Scheduled Task (runs at logon)…"
     try {
-        $installCmd = @($BinPath, "install", "--config", $ConfigPath)
-        if ($script:LockdownEnabled) {
-            $installCmd += @("--user", "NT AUTHORITY\LocalService")
-        }
-        & $installCmd[0] $installCmd[1..($installCmd.Length-1)]
-        Write-Ok "Service installed."
+        $taskName = "RemoteClaw"
+        $currentUser = "$env:USERDOMAIN\$env:USERNAME"
+
+        # Create trigger: run at logon for the current user
+        $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+
+        # Create action: run RemoteClaw with the config path
+        $action = New-ScheduledTaskAction -Execute $BinPath -Argument "run --config `"$ConfigPath`""
+
+        # Create principal: run as the current user, interactive mode, normal privileges
+        $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
+
+        # Create settings
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+
+        # Register the task (force overwrite if exists)
+        Register-ScheduledTask -TaskName $taskName -Trigger $trigger -Action $action `
+            -Principal $principal -Settings $settings -Force | Out-Null
+
+        Write-Ok "Scheduled Task 'RemoteClaw' registered (runs at logon in user session)."
         return $true
     }
     catch {
-        Write-Warn "Service installation failed. You can run 'remoteclaw install --config $ConfigPath' manually."
+        Write-Err "Scheduled Task registration failed: $_"
         return $false
     }
 }
 
 # --- Verify ----------------------------------------------------------------
 
-function Test-ServiceStatus {
-    Write-Info "Checking service status…"
+function Test-TaskStatus {
+    Write-Info "Checking Scheduled Task status…"
     try {
-        & $BinPath status
-        Write-Ok "RemoteClaw service is running."
+        $task = Get-ScheduledTask -TaskName "RemoteClaw" -ErrorAction SilentlyContinue
+        if ($task) {
+            Write-Ok "Scheduled Task 'RemoteClaw' is registered."
+            Write-Info "  It will start the next time you log on (or manually via 'schtasks /run /tn RemoteClaw')."
+        }
+        else {
+            Write-Warn "Scheduled Task not found. Re-run the installer."
+        }
     }
     catch {
-        Write-Warn "Service may not be running yet. Check with: remoteclaw status"
+        Write-Warn "Could not check task status: $_"
     }
 }
 
@@ -393,18 +409,27 @@ function Write-Summary {
     Write-Host ""
     Write-Host "=== Installation Complete ===" -ForegroundColor White
     Write-Host ""
+    Write-Host "  RemoteClaw will run at logon in your user session." -ForegroundColor Green
+    Write-Host ""
     Write-Host "  Binary:     $BinPath"
     Write-Host "  Config:     $ConfigPath"
     Write-Host "  Env file:   $EnvPath"
-    Write-Host "  Audit logs: $LogDir\"
+    Write-Host "  Audit logs: $LogDir"
+    Write-Host ""
+    Write-Host "  Runtime model:"
+    Write-Host "    • RemoteClaw starts when you log in (per-user Scheduled Task)."
+    Write-Host "    • It runs with your privileges in your session."
+    Write-Host "    • Locking your screen keeps it running; logging off stops it."
+    Write-Host "    • See ADR 0004 (best-effort defense-in-depth model)."
     Write-Host ""
     Write-Host "  Talk to your bot in Webex — send it a message like:"
     Write-Host '    "What'"'"'s the disk usage?"'
     Write-Host ""
     Write-Host "  Useful commands:"
-    Write-Host "    remoteclaw status                                       Show service status"
-    Write-Host "    remoteclaw uninstall                                    Remove the service"
-    Write-Host '    Remove-Item "C:\ProgramData\remoteclaw" -Recurse        Remove all files'
+    Write-Host "    schtasks /run /tn RemoteClaw                            Start RemoteClaw now (manual trigger)"
+    Write-Host "    Get-ScheduledTask -TaskName RemoteClaw                  Check task status"
+    Write-Host "    Unregister-ScheduledTask -TaskName RemoteClaw -Confirm:`$false   Remove the task"
+    Write-Host "    Remove-Item `"$InstallDir`" -Recurse -Force             Remove all files"
     Write-Host ""
 }
 
@@ -426,8 +451,8 @@ function Main {
     Get-UserConfig
     New-EnvFile
     New-ConfigFile
-    Install-RemoteClawService | Out-Null
-    Test-ServiceStatus
+    Install-RemoteClawTask | Out-Null
+    Test-TaskStatus
     Write-Summary
 }
 

@@ -85,6 +85,11 @@ privilege separation or claim an airtight boundary.**
   described here (keeping the service account as an explicit headless option).
   Deferred to a separate, reviewed change.
 
+  > **Resolved (2026-07-13):** implemented. `remoteclaw install` now defaults to
+  > a per-user service (systemd `--user` / LaunchAgent) with `--system` as the
+  > headless opt-in; the Windows installer registers a run-at-login Scheduled
+  > Task instead of a service. See the CHANGELOG and `install.sh`/`install.ps1`.
+
 ## Relationship to prior ADRs
 
 - **ADR 0003** stands. Its in-process guard and `pass` secret storage are
