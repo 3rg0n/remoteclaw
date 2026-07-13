@@ -1,73 +1,92 @@
-# 0004. Privilege-separated executor for airtight config/secret isolation
+# 0004. Security posture: best-effort defense-in-depth, run as the installing user
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-07-13
+- Supersedes the "privilege-separated executor" proposal previously drafted under this number.
 
 ## Context
 
-ADR 0003 introduced the config/secret lockdown with two layers: OS file
-ownership (run the service as a dedicated low-privilege user) and an in-process
-guard (`internal/executor.Guard`). During implementation a fundamental limit
-surfaced:
+ADR 0003 shipped a config/secret lockdown and floated a follow-up: a
+"privilege-separated executor" that would run agent-driven commands as a
+*different, lower-privilege* user than the service core, to make config/secrets
+unreadable by the agent "even as admin, via any command."
 
-**RemoteClaw is a single process running as a single OS user.** The service must
-read its own `config.yaml` and secrets at startup, but `execute_command` and the
-file tools run *in that same process, as that same uid*. Therefore file
-ownership cannot simultaneously (a) let the service read its config and (b) deny
-the agent's own `execute_command "cat config.yaml"` — both are the same user.
+Working through the mechanics showed that goal is both **unbuildable as framed**
+and **misaligned with how RemoteClaw actually runs**:
 
-The in-process guard closes the easy paths (file tools hard-deny protected
-paths; `execute_command` pattern-denies obvious secret reads), but a process
-that can run arbitrary shell can evade any in-process command-pattern match
-(base64, copy-then-read, `printf` indirection, interpreters). So the goal "even
-as admin, no command can read the secrets" is **not** achievable with the
-current single-uid executor. This ADR proposes the change that makes it true.
+1. **RemoteClaw runs with the installing user's privileges — this is inherent.**
+   It is a local agent the user installs and runs to act on their behalf. Its
+   privileges are exactly the user's: if the user is an administrator, RemoteClaw
+   is an administrator. There is no getting around this and it is not a defect —
+   it is the nature of "remote hands for *your* machine."
 
-## Decision (proposed)
+2. **You cannot setuid from one unprivileged user to another.** Dropping to a
+   distinct low-privilege worker requires the parent to hold `CAP_SETUID` (root)
+   on Linux or `SeAssignPrimaryTokenPrivilege` (SYSTEM) on Windows. A
+   non-privileged RemoteClaw cannot spawn a lower-privileged child. So true
+   privilege separation would require RemoteClaw to run as root/SYSTEM — the
+   opposite of "least privilege" and contrary to point 1.
 
-Introduce **privilege separation** in the executor:
+3. **Runtime model.** Headless operation needs a service account: straightforward
+   on Linux/macOS (systemd `--user` or a system unit). On **Windows** running as
+   a true service requires an Authenticode-signed binary, so the practical model
+   there is **run-at-login** — RemoteClaw runs in the user's session (e.g. the
+   user logs in, locks the screen, and it keeps running with their privileges).
 
-- The **service core** continues to run as a low-privilege service user
-  (`remoteclaw-svc`) that *can* read config/secrets at startup.
-- **All agent-driven side effects** — `execute_command` child processes and the
-  `read_file`/`write_file`/`list_dir` operations — are performed as a **distinct
-  second identity** (`remoteclaw-exec`) that has **no read access** to config,
-  `.env`, or the secret store.
-  - Unix: spawn child processes with `syscall.SysProcAttr{Credential: ...}` for
-    the exec uid; perform file-tool I/O via a small helper that drops to that
-    uid (or a separate short-lived helper process), never in the privileged
-    core.
-  - Windows: launch commands with `CreateProcessAsUser` under a restricted
-    token / dedicated low-privilege account; deny that account on the config
-    ACL while granting the service-core account read.
+### The limitation we are explicit about
 
-With this, `execute_command "cat config.yaml"` (and any variant) is denied by
-the **OS** regardless of the command string — the guarantee no longer depends on
-enumerating dangerous patterns.
+If an attacker gains authenticated access to the bot, they can instruct
+RemoteClaw to fetch and run a payload — e.g. `curl <url> | sh` or download-then-
+execute. **No amount of command checking, confirmation gating, or least-
+privilege posture prevents this**, because the payload runs with the user's own
+privileges, which RemoteClaw legitimately has. The dangerous-command checker can
+be evaded (encoding, indirection, staged fetch); the challenge only gates
+commands the checker *flags*; least privilege doesn't help when "least" is
+already "the user." This is a real, accepted residual risk.
 
-The installer provisions both accounts and sets ownership/ACLs so config is
-readable by `remoteclaw-svc` and denied to `remoteclaw-exec`.
+## Decision
+
+**Adopt an explicit best-effort, defense-in-depth posture. Do not build
+privilege separation or claim an airtight boundary.**
+
+- RemoteClaw runs as the **installing user** (or a dedicated service account for
+  headless use). Its privileges equal that user's; this is by design.
+- The security layers — email allowlist, per-space rate limit, dangerous-command
+  checker, AES-GCM challenge-response for destructive commands, in-process
+  config/secret lockdown guard (ADR 0003), and audit logging — are **layers that
+  raise the cost and narrow the surface** for a *remote* attacker abusing the
+  chat interface. They are **not** claimed to stop a determined attacker who can
+  deliver and execute a payload with the user's privileges.
+- The **challenge-response** remains the strongest single control precisely
+  because its authorizing secret lives *off the machine*, in the operator's head
+  — but it only covers commands that reach the confirmation path.
+- The operator is informed of and accepts this risk. The goal is "meaningful,
+  layered friction and traceability," explicitly **not** "impregnable."
 
 ## Consequences
 
-- **Airtight guarantee.** "Even as the admin who installed it, RemoteClaw cannot
-  be instructed to read its secrets/settings via any command" becomes true,
-  because the OS — not a regex — enforces it. Editing settings requires local
-  root/Administrator.
-- **Cost / complexity.** Cross-platform privilege dropping is non-trivial,
-  especially on Windows (token creation, `SeAssignPrimaryTokenPrivilege`, the
-  logon-account/`LogonUser` dance). File tools must route I/O through the exec
-  identity, which changes `internal/executor/filesystem.go`.
-- **Interaction with pass.** The exec identity must not reach the secret store
-  either; the store belongs to the service-core account. This also resolves the
-  ADR 0003 note about the store vs. service-account tension.
-- **Supersedes** the aspiration in ADR 0003 that OS file ownership alone yields
-  the airtight guarantee. ADR 0003's shipped behavior (low-priv service user +
-  in-process guard as defense-in-depth) stands as the interim state until this
-  is implemented.
+- **Honest and buildable.** We stop chasing a guarantee the architecture can't
+  provide and document what the layers actually do. No root-monitor rewrite, no
+  setuid worker, no cross-platform token juggling.
+- **The shipped controls stand** as valid best-effort layers; nothing from ADR
+  0003 is removed. The in-process lockdown guard remains defense-in-depth (it
+  raises the bar against casual/naive secret access; it does not stop a crafted
+  command).
+- **Accepted residual risk:** an authenticated attacker can run arbitrary code
+  as the user (payload delivery). Mitigations that *reduce likelihood* — strict
+  allowlist, keeping the bot token secret, challenge-response on destructive
+  ops, and audit review — matter more than any attempt at hard containment.
+  Operators who need containment should run RemoteClaw in an already-sandboxed
+  environment (dedicated VM/container/low-privilege account) — an *external*
+  boundary, not one RemoteClaw can impose on itself.
+- **Follow-up (tracked, not in this change):** PR #2's installer provisions a
+  dedicated low-privilege `remoteclaw` service user and a system service. That
+  should be realigned to the run-as-installing-user / run-at-login model
+  described here (keeping the service account as an explicit headless option).
+  Deferred to a separate, reviewed change.
 
-## Status note
+## Relationship to prior ADRs
 
-Proposed, not yet implemented. The current release ships ADR 0003's layers and
-documents the in-process command guard honestly as defense-in-depth. This ADR is
-the tracked follow-up for the airtight version.
+- **ADR 0003** stands. Its in-process guard and `pass` secret storage are
+  best-effort layers consistent with this posture. This ADR retires only ADR
+  0003's aspiration that OS enforcement could make the guarantee *airtight*.

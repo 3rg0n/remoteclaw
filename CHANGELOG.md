@@ -13,11 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (strict key allowlist), overriding `.env`; falls back to `.env`/env with a
   warning when `pass` is unavailable
   ([ADR 0003](docs/adr/0003-secret-storage-and-config-lockdown.md))
-- Config/secret lockdown (`security.lockdown`, default true): the agent's own
-  tools cannot read or modify its config/`.env`/secret store — enforced by the
-  OS (installer runs the service as a dedicated low-privilege account with
-  root-owned config) with an in-process guard as defense-in-depth. Opt out with
-  `security.lockdown: false`
+- Config/secret lockdown (`security.lockdown`, default true): an in-process
+  guard that denies the agent's file tools access to config/`.env`/secret store
+  and best-effort-denies secret-reading commands. Best-effort defense-in-depth,
+  not a hard boundary — see [ADR 0004](docs/adr/0004-privilege-separated-executor.md).
+  Opt out with `security.lockdown: false`
+- Documented security posture ([ADR 0004](docs/adr/0004-privilege-separated-executor.md)):
+  RemoteClaw runs with the installing user's privileges by design; the security
+  layers are best-effort and explicitly do not prevent an authenticated attacker
+  from delivering/running a payload. Retires the earlier "airtight privilege
+  separation" aspiration as unbuildable given the run-as-user model.
 - `remoteclaw install --user <account>` to run the service under a dedicated
   low-privilege account
 - Installer prompts (secure defaults): lock down config/secrets, store secrets
