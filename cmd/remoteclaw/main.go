@@ -15,6 +15,7 @@ import (
 
 var cfgPath string
 var svcUser string
+var svcSystem bool
 
 func main() {
 	if err := newRootCmd().Execute(); err != nil {
@@ -78,7 +79,7 @@ func newRunCmd() *cobra.Command {
 func newInstallCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "install",
-		Short: "Install RemoteClaw as a system service",
+		Short: "Install RemoteClaw to run automatically (per-user by default; --system for headless)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			// Resolve config path to absolute path
 			absConfigPath, err := filepath.Abs(cfgPath)
@@ -92,6 +93,13 @@ func newInstallCmd() *cobra.Command {
 				return fmt.Errorf("getting executable path: %w", err)
 			}
 
+			// Default to a per-user service (runs as the installing user, ADR
+			// 0004). --system opts into a system-wide service for headless use.
+			mode := service.ModeUser
+			if svcSystem {
+				mode = service.ModeSystem
+			}
+
 			// Create service manager
 			mgr, err := service.New(service.Config{
 				Name:        "remoteclaw",
@@ -99,6 +107,7 @@ func newInstallCmd() *cobra.Command {
 				Description: "RemoteClaw — AI-powered remote system control via Webex",
 				ConfigPath:  absConfigPath,
 				BinaryPath:  binPath,
+				Mode:        mode,
 				UserName:    svcUser,
 			})
 			if err != nil {
@@ -121,35 +130,45 @@ func newInstallCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&svcUser, "user", "", "OS account to run the service as (dedicated low-privilege user recommended so config/secrets stay unreadable by the agent)")
+	cmd.Flags().BoolVar(&svcSystem, "system", false, "install a system-wide service for headless/always-on use (default: per-user service running as the installing user)")
+	cmd.Flags().StringVar(&svcUser, "user", "", "with --system: OS account the system service runs as (empty = platform default)")
 	return cmd
 }
 
+// serviceManagerForMode builds a service manager whose Mode matches the
+// install mode. kardianos resolves the service location (user vs system unit)
+// from the same Option set used at install time, so uninstall/status MUST pass
+// the same --system flag that install did, or they look in the wrong place.
+func serviceManagerForMode() (*service.Manager, error) {
+	absConfigPath, err := filepath.Abs(cfgPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolving config path: %w", err)
+	}
+	binPath, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("getting executable path: %w", err)
+	}
+	mode := service.ModeUser
+	if svcSystem {
+		mode = service.ModeSystem
+	}
+	return service.New(service.Config{
+		Name:        "remoteclaw",
+		DisplayName: "RemoteClaw Agent",
+		Description: "RemoteClaw — AI-powered remote system control via Webex",
+		ConfigPath:  absConfigPath,
+		BinaryPath:  binPath,
+		Mode:        mode,
+		UserName:    svcUser,
+	})
+}
+
 func newUninstallCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "uninstall",
-		Short: "Uninstall the RemoteClaw system service",
+		Short: "Uninstall the RemoteClaw service (use --system if it was installed with --system)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Resolve config path to absolute path (needed even though we're stopping/uninstalling)
-			absConfigPath, err := filepath.Abs(cfgPath)
-			if err != nil {
-				return fmt.Errorf("resolving config path: %w", err)
-			}
-
-			// Get current executable path
-			binPath, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("getting executable path: %w", err)
-			}
-
-			// Create service manager
-			mgr, err := service.New(service.Config{
-				Name:        "remoteclaw",
-				DisplayName: "RemoteClaw Agent",
-				Description: "RemoteClaw — AI-powered remote system control via Webex",
-				ConfigPath:  absConfigPath,
-				BinaryPath:  binPath,
-			})
+			mgr, err := serviceManagerForMode()
 			if err != nil {
 				return fmt.Errorf("creating service manager: %w", err)
 			}
@@ -166,33 +185,17 @@ func newUninstallCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&svcSystem, "system", false, "the service was installed as a system-wide service (--system at install time)")
+	return cmd
 }
 
 func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show RemoteClaw service status",
+		Short: "Show RemoteClaw service status (use --system if it was installed with --system)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			// Resolve config path to absolute path
-			absConfigPath, err := filepath.Abs(cfgPath)
-			if err != nil {
-				return fmt.Errorf("resolving config path: %w", err)
-			}
-
-			// Get current executable path
-			binPath, err := os.Executable()
-			if err != nil {
-				return fmt.Errorf("getting executable path: %w", err)
-			}
-
 			// Create service manager
-			mgr, err := service.New(service.Config{
-				Name:        "remoteclaw",
-				DisplayName: "RemoteClaw Agent",
-				Description: "RemoteClaw — AI-powered remote system control via Webex",
-				ConfigPath:  absConfigPath,
-				BinaryPath:  binPath,
-			})
+			mgr, err := serviceManagerForMode()
 			if err != nil {
 				return fmt.Errorf("creating service manager: %w", err)
 			}
@@ -207,6 +210,8 @@ func newStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&svcSystem, "system", false, "the service was installed as a system-wide service (--system at install time)")
+	return cmd
 }
 
 func newEncryptChallengeCmd() *cobra.Command {

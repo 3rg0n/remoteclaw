@@ -55,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - linux/arm64 and darwin/amd64 build targets in Makefile and CI
 
 ### Changed
+- Install model realigned to run as the installing user (ADR 0004):
+  `remoteclaw install` now defaults to a **per-user** service — systemd `--user`
+  on Linux, a LaunchAgent on macOS, and a **run-at-login Scheduled Task** on
+  Windows (no service signing required). `install --system` opts into the old
+  system-service/headless path. Installers no longer create a dedicated
+  low-privilege system account or root-owned config by default.
 - Inference architecture: replaced the embedded Ollama + AWS Bedrock SDKs and
   the `auto`/`local`/`bedrock` provider scheme with `inferd` (local) and
   `openai-compat` (remote); provider resolves to `openai-compat` when

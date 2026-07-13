@@ -3,18 +3,36 @@ package service
 import (
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/kardianos/service"
 )
 
+// InstallMode selects how RemoteClaw is installed to run.
+type InstallMode string
+
+const (
+	// ModeUser installs a per-user service that runs as the installing user
+	// (systemd --user on Linux, a LaunchAgent on macOS). This is the default
+	// and matches ADR 0004: RemoteClaw runs with the installing user's
+	// privileges. Not supported on Windows via this manager — the Windows
+	// installer uses a run-at-login Scheduled Task instead.
+	ModeUser InstallMode = "user"
+	// ModeSystem installs a system-wide service (systemd system unit, launchd
+	// daemon, Windows service), optionally under a dedicated account via
+	// UserName. For headless / always-on deployments.
+	ModeSystem InstallMode = "system"
+)
+
 // Config holds service installation configuration
 type Config struct {
-	Name        string // service name
-	DisplayName string // human-readable display name
-	Description string // service description
-	ConfigPath  string // path to config file
-	BinaryPath  string // path to binary (empty = current executable)
-	UserName    string // OS account to run the service as (empty = platform default). Used to run under a dedicated low-privilege user so config/secrets owned by root remain unreadable by the agent.
+	Name        string      // service name
+	DisplayName string      // human-readable display name
+	Description string      // service description
+	ConfigPath  string      // path to config file
+	BinaryPath  string      // path to binary (empty = current executable)
+	Mode        InstallMode // user (default) or system; see InstallMode
+	UserName    string      // for ModeSystem: OS account to run the service as (empty = platform default)
 }
 
 // Manager wraps kardianos/service for service management
@@ -51,6 +69,16 @@ func New(cfg Config) (*Manager, error) {
 	if cfg.Description == "" {
 		cfg.Description = "RemoteClaw — AI-powered remote system control via Webex"
 	}
+	if cfg.Mode == "" {
+		cfg.Mode = ModeUser // secure/default per ADR 0004: run as the installing user
+	}
+
+	// Windows has no per-user service concept in kardianos; the Windows
+	// installer uses a run-at-login Scheduled Task for the user path instead.
+	if cfg.Mode == ModeUser && runtime.GOOS == "windows" {
+		return nil, fmt.Errorf("user-mode service install is not supported on Windows; " +
+			"use the run-at-login task set up by install.ps1, or install --system")
+	}
 
 	// Get binary path
 	binPath := cfg.BinaryPath
@@ -60,6 +88,13 @@ func New(cfg Config) (*Manager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("getting executable path: %w", err)
 		}
+	}
+
+	// Options: for user mode, install as a current-user service (systemd
+	// --user / launchd LaunchAgent), which runs as the installing user.
+	options := service.KeyValue{}
+	if cfg.Mode == ModeUser {
+		options["UserService"] = true
 	}
 
 	// Create service configuration
@@ -72,10 +107,12 @@ func New(cfg Config) (*Manager, error) {
 			"run",
 			"--config", cfg.ConfigPath,
 		},
-		// UserName runs the service under a dedicated low-privilege account so
-		// that config/secrets owned by root remain unreadable by the agent —
-		// the OS-enforced half of the lockdown. Empty = platform default.
-		UserName: cfg.UserName,
+		Option: options,
+	}
+	// UserName only applies to a system service running under a dedicated
+	// account. A user service already runs as the installing user.
+	if cfg.Mode == ModeSystem {
+		svcCfg.UserName = cfg.UserName
 	}
 
 	// Create service

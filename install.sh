@@ -2,10 +2,15 @@
 set -euo pipefail
 
 # RemoteClaw Installer — Linux / macOS
-# Usage: curl -fsSL https://raw.githubusercontent.com/3rg0n/remoteclaw/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/3rg0n/remoteclaw/main/install.sh | bash [--system] [--user <account>]
+#
+# Default: per-user installation in ${HOME}/.local/bin and XDG config dirs (no sudo required).
+# --system: system-wide service (requires sudo). Optionally --user <account> for the service account.
 
 REPO="3rg0n/remoteclaw"
 RELEASE_URL="https://github.com/${REPO}/releases/latest/download"
+INSTALL_MODE="user"  # "user" (default) or "system"
+SERVICE_USER=""      # Only used in system mode
 
 # --- Colors -----------------------------------------------------------
 RED='\033[0;31m'
@@ -47,30 +52,46 @@ detect_platform() {
         *)              err "Unsupported architecture: $arch"; exit 1 ;;
     esac
 
-    # Set platform-specific paths
-    if [ "$OS" = "linux" ]; then
-        CONF_DIR="/etc/remoteclaw"
-        LOG_DIR="/var/log/remoteclaw"
+    # Set paths based on install mode
+    if [ "$INSTALL_MODE" = "system" ]; then
+        # System-wide paths (requires sudo)
+        if [ "$OS" = "linux" ]; then
+            CONF_DIR="/etc/remoteclaw"
+            LOG_DIR="/var/log/remoteclaw"
+        else
+            CONF_DIR="/usr/local/etc/remoteclaw"
+            LOG_DIR="/usr/local/var/log/remoteclaw"
+        fi
+        BIN_DIR="/usr/local/bin"
     else
-        CONF_DIR="/usr/local/etc/remoteclaw"
-        LOG_DIR="/usr/local/var/log/remoteclaw"
+        # Per-user paths (no sudo required; XDG-compliant)
+        BIN_DIR="${HOME}/.local/bin"
+        CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/remoteclaw"
+        LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/remoteclaw/logs"
     fi
-    BIN_DIR="/usr/local/bin"
+
     BIN_PATH="${BIN_DIR}/remoteclaw"
     CONFIG_PATH="${CONF_DIR}/config.yaml"
     ENV_PATH="${CONF_DIR}/.env"
 }
 
-# --- Check sudo --------------------------------------------------------
+# --- Check sudo (only for system mode) ---------------------------------
 check_sudo() {
+    if [ "$INSTALL_MODE" = "user" ]; then
+        # Per-user install: no sudo required
+        SUDO=""
+        return 0
+    fi
+
+    # System mode: check for sudo
     if [ "$(id -u)" -eq 0 ]; then
         SUDO=""
     elif command -v sudo >/dev/null 2>&1; then
         SUDO="sudo"
-        info "Sudo access is required for installation."
+        info "Sudo access is required for system-wide installation."
         sudo -v || { err "Failed to obtain sudo. Run as root or ensure sudo is configured."; exit 1; }
     else
-        err "This script requires root privileges. Please run as root."
+        err "System-wide installation requires root privileges. Please run as root or with sudo."
         exit 1
     fi
 }
@@ -218,7 +239,11 @@ prompt_config() {
     fi
 
     # Lockdown mode (default Y)
-    printf "  Lock down config & secrets? [Y/n] "
+    if [ "$INSTALL_MODE" = "system" ]; then
+        printf "  Enable in-process secrets guard? [Y/n] "
+    else
+        printf "  Enable config/secrets lockdown? [Y/n] "
+    fi
     read -r ENABLE_LOCKDOWN
     ENABLE_LOCKDOWN="${ENABLE_LOCKDOWN:-y}"
     if [[ ! "$ENABLE_LOCKDOWN" =~ ^[nN] ]]; then
@@ -231,37 +256,40 @@ prompt_config() {
 # --- Create directories and apply lockdown ------------------------------------
 create_dirs() {
     info "Creating directories…"
-    $SUDO mkdir -p "$CONF_DIR"
-    $SUDO mkdir -p "$LOG_DIR"
-    ok "Created ${CONF_DIR} and ${LOG_DIR}"
 
-    if [ "$LOCKDOWN_ENABLED" = true ] && [ "$OS" = "linux" ]; then
-        info "Applying lockdown (dedicated low-privilege service user)…"
+    if [ "$INSTALL_MODE" = "user" ]; then
+        # Per-user: create without sudo
+        mkdir -p "$CONF_DIR"
+        mkdir -p "$LOG_DIR"
+        ok "Created ${CONF_DIR} and ${LOG_DIR}"
 
-        # Create a dedicated low-privilege service account. Running as this user
-        # (instead of root) is the meaningful privilege reduction: it limits what
-        # the agent can touch on the host and addresses the "runs as root" risk.
-        $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin remoteclaw 2>/dev/null || true
-        ok "Service user 'remoteclaw' ensured."
-
-        # Config/secrets are owned by the service user and readable ONLY by it
-        # (0700 dir, 0600 files). The service must read its own config at startup,
-        # so it cannot be root-exclusive — but every OTHER account on the box
-        # (including other non-root users) is denied. The agent's OWN tools are
-        # denied by the in-process lockdown guard (defense-in-depth). Making reads
-        # unreadable to the agent's own uid via any command requires the
-        # privilege-separated executor tracked in ADR 0004.
-        $SUDO chown -R remoteclaw:remoteclaw "$CONF_DIR"
-        $SUDO chmod 700 "$CONF_DIR"
-        ok "Config directory restricted to the service user."
-
-        # Audit log directory: writable by the service user.
+        # Per-user dirs: restrict to user only for security
+        chmod 700 "$CONF_DIR"
+        chmod 700 "$LOG_DIR"
+    else
+        # System mode: create with sudo, optionally dedicated user
+        $SUDO mkdir -p "$CONF_DIR"
         $SUDO mkdir -p "$LOG_DIR"
-        $SUDO chown -R remoteclaw:remoteclaw "$LOG_DIR"
-        $SUDO chmod 750 "$LOG_DIR"
-        ok "Audit log directory writable by service user."
-    elif [ "$LOCKDOWN_ENABLED" = true ]; then
-        warn "macOS: dedicated-service-user lockdown requires manual setup; using in-process lockdown only."
+        ok "Created ${CONF_DIR} and ${LOG_DIR}"
+
+        if [ -n "$SERVICE_USER" ] && [ "$OS" = "linux" ]; then
+            info "Configuring system service user…"
+            # Create a dedicated low-privilege service account
+            $SUDO useradd --system --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER" 2>/dev/null || true
+            ok "Service user '${SERVICE_USER}' ensured."
+
+            # Config/secrets owned by the service user, readable only by it (0700 dir, 0600 files).
+            # The service reads its own config at startup; other accounts are denied.
+            # In-process guard provides defense-in-depth (ADR 0004).
+            $SUDO chown -R "${SERVICE_USER}:${SERVICE_USER}" "$CONF_DIR"
+            $SUDO chmod 700 "$CONF_DIR"
+            ok "Config directory restricted to service user '${SERVICE_USER}'."
+
+            # Audit log directory: writable by service user
+            $SUDO chown -R "${SERVICE_USER}:${SERVICE_USER}" "$LOG_DIR"
+            $SUDO chmod 750 "$LOG_DIR"
+            ok "Audit log directory writable by service user."
+        fi
     fi
 }
 
@@ -269,24 +297,23 @@ create_dirs() {
 generate_env() {
     if [ "$USE_PASS" = true ]; then
         info "Storing secrets in the current user's pass store…"
-        # NOTE: pass is per-user and GPG-session bound. This stores secrets in
-        # the INSTALLING user's store. When lockdown runs the service as the
-        # dedicated 'remoteclaw' account, that account has its own (empty) store
-        # and no access to this one — so the service would fall back to .env.
-        # For a service-account + pass setup, the store must belong to the
-        # service user (out of scope for this installer; see README/ADR 0003).
+        # pass is per-user and GPG-session bound. This stores secrets in
+        # the installing user's store. For a dedicated service account with pass,
+        # the store must belong to that account (out of scope; see ADR 0003).
         printf '%s' "$BOT_TOKEN" | pass insert -m -f remoteclaw/webex_bot_token >/dev/null 2>&1 || \
             err "Failed to store bot token in pass"
         ok "Secrets stored in pass for user '$(id -un)'."
-        if [ "$LOCKDOWN_ENABLED" = true ] && [ "$OS" = "linux" ]; then
-            warn "Lockdown runs the service as 'remoteclaw', which cannot read this user's pass store."
-            warn "Either provision the store under the service account, or use the .env option instead."
+        if [ "$INSTALL_MODE" = "system" ] && [ -n "$SERVICE_USER" ]; then
+            warn "System service runs as '${SERVICE_USER}', which cannot read this user's pass store."
+            warn "Either provision the store under that account, or use the .env option instead."
         fi
         # The challenge ciphertext is non-sensitive; keep it in .env for the service.
         if [ -n "$CHALLENGE_ENCRYPTED" ]; then
             echo "CHALLENGE=${CHALLENGE_ENCRYPTED}" | $SUDO tee "$ENV_PATH" >/dev/null
             $SUDO chmod 600 "$ENV_PATH"
-            [ "$OS" = "linux" ] && $SUDO chown remoteclaw:remoteclaw "$ENV_PATH" 2>/dev/null || true
+            if [ "$INSTALL_MODE" = "system" ] && [ -n "$SERVICE_USER" ] && [ "$OS" = "linux" ]; then
+                $SUDO chown "${SERVICE_USER}:${SERVICE_USER}" "$ENV_PATH" 2>/dev/null || true
+            fi
         fi
     else
         info "Generating ${ENV_PATH}…"
@@ -297,15 +324,12 @@ CHALLENGE=${CHALLENGE_ENCRYPTED}"
         fi
 
         echo "$env_content" | $SUDO tee "$ENV_PATH" >/dev/null
-        if [ "$LOCKDOWN_ENABLED" = true ]; then
-            $SUDO chmod 600 "$ENV_PATH"
-            # Owned by the service user so the service can read it; 0600 denies
-            # every other account. The agent's own tools are denied by the guard.
-            if [ "$OS" = "linux" ]; then
-                $SUDO chown remoteclaw:remoteclaw "$ENV_PATH" 2>/dev/null || true
-            fi
-        else
-            $SUDO chmod 644 "$ENV_PATH"
+        $SUDO chmod 600 "$ENV_PATH"
+
+        # Ownership depends on install mode
+        if [ "$INSTALL_MODE" = "system" ] && [ -n "$SERVICE_USER" ] && [ "$OS" = "linux" ]; then
+            # System mode: owned by service user
+            $SUDO chown "${SERVICE_USER}:${SERVICE_USER}" "$ENV_PATH" 2>/dev/null || true
         fi
         ok "Created ${ENV_PATH}"
     fi
@@ -369,6 +393,7 @@ security:
   rate_limit_per_min: 10
 ${challenge_line}
   lockdown: ${lockdown_value}
+  protected_paths: []
 
 execution:
   default_timeout: "30s"
@@ -386,24 +411,29 @@ health:
 YAML
 
     ok "Created ${CONFIG_PATH}"
-    if [ "$LOCKDOWN_ENABLED" = true ]; then
-        $SUDO chmod 600 "$CONFIG_PATH"
-        # Owned by the service user so the service reads it at startup; 0600
-        # denies all other accounts. (The config dir chmod 700 is applied in
-        # create_dirs; this re-asserts file ownership after the tee wrote it.)
-        if [ "$OS" = "linux" ]; then
-            $SUDO chown remoteclaw:remoteclaw "$CONFIG_PATH" 2>/dev/null || true
-        fi
+    $SUDO chmod 600 "$CONFIG_PATH"
+
+    # Ownership depends on install mode
+    if [ "$INSTALL_MODE" = "system" ] && [ -n "$SERVICE_USER" ] && [ "$OS" = "linux" ]; then
+        # System mode: owned by service user so it can read at startup
+        $SUDO chown "${SERVICE_USER}:${SERVICE_USER}" "$CONFIG_PATH" 2>/dev/null || true
     fi
 }
 
 # --- Install service ------------------------------------------------------
 install_service() {
-    info "Installing RemoteClaw as a system service…"
+    if [ "$INSTALL_MODE" = "user" ]; then
+        info "Installing RemoteClaw as a user service…"
+    else
+        info "Installing RemoteClaw as a system service…"
+    fi
+
     local install_cmd="$SUDO \"$BIN_PATH\" install --config \"$CONFIG_PATH\""
 
-    if [ "$LOCKDOWN_ENABLED" = true ] && [ "$OS" = "linux" ]; then
-        install_cmd="$install_cmd --user remoteclaw"
+    if [ "$INSTALL_MODE" = "system" ] && [ -n "$SERVICE_USER" ]; then
+        install_cmd="$install_cmd --system --user \"$SERVICE_USER\""
+    elif [ "$INSTALL_MODE" = "system" ]; then
+        install_cmd="$install_cmd --system"
     fi
 
     if eval "$install_cmd"; then
@@ -429,34 +459,85 @@ print_summary() {
     echo ""
     printf "${BOLD}=== Installation Complete ===${NC}\n"
     echo ""
-    echo "  Binary:     ${BIN_PATH}"
-    echo "  Config:     ${CONFIG_PATH}"
-    echo "  Env file:   ${ENV_PATH}"
-    echo "  Audit logs: ${LOG_DIR}/"
-    echo ""
-    echo "  Talk to your bot in Webex — send it a message like:"
-    echo "    \"What's the disk usage?\""
-    echo ""
-    echo "  Useful commands:"
-    echo "    remoteclaw status                     Show service status"
-    echo "    remoteclaw uninstall                  Remove the service"
-    echo "    sudo rm /usr/local/bin/remoteclaw     Remove the binary"
-    if [ "$OS" = "linux" ]; then
-        echo "    sudo rm -rf /etc/remoteclaw/          Remove config"
+    if [ "$INSTALL_MODE" = "user" ]; then
+        echo "  Mode:       Per-user installation"
+        echo "  Binary:     ${BIN_PATH}"
+        echo "  Config:     ${CONFIG_PATH}"
+        echo "  Env file:   ${ENV_PATH}"
+        echo "  Audit logs: ${LOG_DIR}/"
+        echo ""
+        if [[ ":$PATH:" != *":${HOME}/.local/bin:"* ]]; then
+            warn "Note: ${HOME}/.local/bin is not in your PATH. Add it or use the full path to run remoteclaw."
+        fi
+        echo "  Talk to your bot in Webex — send it a message like:"
+        echo "    \"What's the disk usage?\""
+        echo ""
+        echo "  Useful commands:"
+        echo "    remoteclaw status                   Show service status"
+        echo "    remoteclaw uninstall                Remove the service"
+        echo "    rm ${BIN_PATH}                      Remove the binary"
+        echo "    rm -rf ${CONF_DIR}                  Remove config"
     else
-        echo "    sudo rm -rf /usr/local/etc/remoteclaw/ Remove config"
+        echo "  Mode:       System-wide installation"
+        echo "  Binary:     ${BIN_PATH}"
+        echo "  Config:     ${CONFIG_PATH}"
+        echo "  Env file:   ${ENV_PATH}"
+        echo "  Audit logs: ${LOG_DIR}/"
+        echo ""
+        echo "  Talk to your bot in Webex — send it a message like:"
+        echo "    \"What's the disk usage?\""
+        echo ""
+        echo "  Useful commands:"
+        echo "    sudo remoteclaw status --system       Show service status"
+        echo "    sudo remoteclaw uninstall --system    Remove the service"
+        echo "    sudo rm ${BIN_PATH}                   Remove the binary"
+        echo "    sudo rm -rf ${CONF_DIR}               Remove config"
     fi
     echo ""
 }
 
+# --- Parse command-line arguments ------------------------------------------
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --system)
+                INSTALL_MODE="system"
+                shift
+                ;;
+            --user)
+                if [ $# -lt 2 ]; then
+                    err "--user requires an account name"
+                    exit 1
+                fi
+                SERVICE_USER="$2"
+                shift 2
+                ;;
+            *)
+                err "Unknown argument: $1"
+                exit 1
+                ;;
+        esac
+    done
+}
+
 # --- Main ------------------------------------------------------------------
 main() {
+    parse_args "$@"
+
     echo ""
     printf "${BOLD}RemoteClaw Installer — AI-powered remote system control via Webex${NC}\n"
     echo ""
 
     detect_platform
     info "Detected platform: ${OS}-${ARCH}"
+    if [ "$INSTALL_MODE" = "user" ]; then
+        info "Install mode: per-user (no sudo required)"
+    else
+        info "Install mode: system-wide"
+        if [ -n "$SERVICE_USER" ]; then
+            info "Service account: ${SERVICE_USER}"
+        fi
+    fi
 
     check_sudo
     check_existing
@@ -471,4 +552,4 @@ main() {
     print_summary
 }
 
-main
+main "$@"

@@ -159,11 +159,25 @@ webex:
 # Foreground
 ./remoteclaw run --config config.yaml
 
-# Or install as a system service
+# Or install to run automatically (default: per-user, runs as YOU)
 ./remoteclaw install --config config.yaml
 ./remoteclaw status
 ./remoteclaw uninstall
 ```
+
+**Runtime model.** RemoteClaw runs with **your** privileges — it is remote hands for
+your own machine (see [ADR 0004](docs/adr/0004-privilege-separated-executor.md)).
+`install` defaults to a **per-user** service:
+
+- **Linux** — a systemd `--user` service (runs in your user session).
+- **macOS** — a LaunchAgent (runs as you).
+- **Windows** — a **run-at-login Scheduled Task** (starts in your session at logon;
+  locking the screen keeps it running, logging off stops it). Windows has no
+  unsigned-service path, so a Scheduled Task is used instead of a service.
+
+For a headless / always-on deployment, use `install --system` (Linux/macOS system
+service; optionally `--user <account>` for a dedicated service account). The
+installer scripts (`install.sh` / `install.ps1`) set this up interactively.
 
 ## Connection Modes
 
