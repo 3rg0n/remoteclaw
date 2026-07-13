@@ -1,7 +1,14 @@
 # 0003. Secret storage via `pass`, and OS-enforced config/secret lockdown
 
-- Status: accepted
+- Status: accepted (airtight-guarantee aspiration amended by [ADR 0004](0004-privilege-separated-executor.md))
 - Date: 2026-07-13
+
+> **Note (added post-acceptance):** the body below refers in places to an
+> "even as admin, the agent can't read secrets" guarantee via OS enforcement.
+> [ADR 0004](0004-privilege-separated-executor.md) establishes that this is not
+> achievable in-process given RemoteClaw runs with the installing user's
+> privileges. Read this ADR's lockdown as **best-effort defense-in-depth**, per
+> ADR 0004. The `pass` storage and in-process guard decisions here stand.
 
 ## Context
 
