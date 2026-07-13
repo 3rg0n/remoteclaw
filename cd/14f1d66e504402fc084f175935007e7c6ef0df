@@ -1,0 +1,48 @@
+THREAT_MODEL.md
+  s_fb340f953812c6::t_0578befa49d96e 18
+  s_fb340f953812c6::t_cf3ff434cdb821 16-17
+  s_fb340f953812c6::t_c20db187f4866c 19
+  s_9b8d68f5aabdc1::t_04235bb579fd4e 20-30,61,65,93-94
+docs/adr/0004-privilege-separated-executor.md
+  s_fb340f953812c6::t_f49c77643bd53d 1,3,5,9-64,68-92
+docs/adr/0003-secret-storage-and-config-lockdown.md
+  s_fb340f953812c6::t_1681538064b76e 3,6-8
+  s_fb340f953812c6::t_2412d2fd4886bb 9-11
+  s_fb340f953812c6::t_7240e4a2f28f02 12
+CHANGELOG.md
+  s_3f706e3f4b4643::t_3d2246b60b33f7 16-25
+docs/adr/README.md
+  s_3f706e3f4b4643::t_d76424a48d0c25 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.12",
+  "base_commit_sha": "cd14f1d66e504402fc084f175935007e7c6ef0df",
+  "prompts": {},
+  "sessions": {
+    "s_3f706e3f4b4643": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0d91ced6-3b3b-46d0-b2cb-8b38a3429c2a",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_9b8d68f5aabdc1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "7333820e-bccc-4f3b-9eb9-50e606acc9ac",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    }
+  }
+}
