@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-17
+
 ### Added
 - Native secret storage via `pass` (passwordstore.org): `WEBEX_BOT_TOKEN`,
   `WMCP_TOKEN`, `OPENAI_API_KEY` read from the `remoteclaw/` store prefix
