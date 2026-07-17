@@ -1,0 +1,19 @@
+CHANGELOG.md
+  s_fb340f953812c6::t_48c812754017a5 10-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "1e1358563bfa873114b6bf9a43004585aee55b08",
+  "prompts": {},
+  "sessions": {
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "unknown"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    }
+  }
+}
