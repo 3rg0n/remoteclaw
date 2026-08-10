@@ -1,0 +1,205 @@
+internal/executor/executor.go
+  s_fb340f953812c6::t_5efab84b4d5992 45-49,52-54
+  s_fb340f953812c6::t_01a8c24347aa15 63-68,70
+  s_fb340f953812c6::t_a52a50af615ff5 16-21,26-30,76,79-80,85-86,115-116,124-125,135-137
+  s_fb340f953812c6::t_25eb6946dc9d28 96-105
+  s_fb340f953812c6::t_c137254affea45 73-75,77,106-114,117-123,133-134
+  s_fb340f953812c6::t_efe286522db4c1 69
+  s_fb340f953812c6::t_fb04511017ad99 130-132
+CLAUDE.md
+  s_fb340f953812c6::t_108c1e9f564052 64
+  s_fb340f953812c6::t_670f77d8e1c55f 55
+  s_fb340f953812c6::t_ed40329c0b4dac 51-54,57
+  s_fb340f953812c6::t_b8592e5472a8bd 82-83
+internal/ai/processor.go
+  s_fb340f953812c6::t_6a82b7dbc12435 11-15
+  s_fb340f953812c6::t_92ec216ad2dd43 110
+internal/agent/integration_test.go
+  s_fb340f953812c6::t_8c6e6bafe3c15d 103-106
+  s_fb340f953812c6::t_f636f089d08b31 72,284,368
+docs/adr/0005-single-authorization-choke-point.md
+  s_fb340f953812c6::t_d148d16c78b6f1 1-110
+internal/executor/guard.go
+  s_fb340f953812c6::t_675cb44e1b5b08 57-58
+  s_fb340f953812c6::t_b87ab2e7f63258 8-13,15-18,47-56
+internal/security/commandpolicy.go
+  s_fb340f953812c6::t_3603ce2aa5cd07 214-218
+  s_fb340f953812c6::t_23d3247ae9cb21 262-264,267-268
+  s_fb340f953812c6::t_f59f9cd570639a 272-274,276,278
+  s_fb340f953812c6::t_b03614bf92083a 63-66,72-78
+  s_fb340f953812c6::t_330b74a130f42d 275,277
+  s_fb340f953812c6::t_02244e164e5d3e 87
+  s_fb340f953812c6::t_ba0b4054022c93 271
+  s_fb340f953812c6::t_335cd08625d75f 80-86,88
+  s_fb340f953812c6::t_e616f84a2ff211 257-261,266,269-270
+  s_fb340f953812c6::t_75ebfbb414a67e 61-62,67-71,79
+  s_fb340f953812c6::t_77361dc25fd3b6 1-60,102-213,219-256,265,279-364
+  s_fb340f953812c6::t_9c1a138404a8c8 89-94
+  s_fb340f953812c6::t_962ad83acdb788 95-101
+docs/adr/0006-one-command-policy-with-tagged-rules.md
+  s_fb340f953812c6::t_0e1d028dba8b98 1-142
+internal/agent/conversation.go
+  s_fb340f953812c6::t_e52d4d2e284511 35-37,39-40
+  s_fb340f953812c6::t_a85dd5640dfffa 20
+internal/config/config_test.go
+  s_fb340f953812c6::t_60c68b8aba064b 622-701
+internal/executor/executor_test.go
+  s_fb340f953812c6::t_6b550527197bb2 679-682,690
+  s_fb340f953812c6::t_4e727a107ec3f2 714-719,723-724,726-727,732-735,737,740-745
+  s_fb340f953812c6::t_c09432e6e3837f 13
+  s_fb340f953812c6::t_8b261f7982cd07 542-557,562-563
+  s_fb340f953812c6::t_261d600c320923 4,6
+  s_fb340f953812c6::t_750f871308f5b1 568-678,683-689,691-713,720-722,725,728-731,736,738-739,746-747
+  s_fb340f953812c6::t_b52fbb13785c70 470-541,558-561,564-567
+README.md
+  s_fb340f953812c6::t_1c0fceba3060a4 357
+  s_fb340f953812c6::t_d8845c6f41c109 320-322,333-335
+  s_fb340f953812c6::t_dcb9110b4d9022 392-393,396-403
+  s_fb340f953812c6::t_9174d91c0b5ec5 256
+  s_fb340f953812c6::t_ae929e48210168 35-39
+  s_fb340f953812c6::t_850687bce603a1 208-210,215-223
+  s_fb340f953812c6::t_c7dc67b4483a05 273-278
+  s_fb340f953812c6::t_a3dc5f6f39608c 295
+  s_fb340f953812c6::t_949cc2e3b1791a 224,404
+  s_fb340f953812c6::t_07a62464d62a11 264-265,279-289
+internal/executor/filesystem.go
+  s_fb340f953812c6::t_c76ed31dd885f9 70-74,81,84,86-90,92-93
+  s_fb340f953812c6::t_a850105126cb52 233-235
+  s_fb340f953812c6::t_d11a89b3c815b5 80,268-272
+  s_fb340f953812c6::t_f47a2192a4fe70 5
+  s_fb340f953812c6::t_8aee15271e1819 49
+  s_fb340f953812c6::t_145fd169665d36 75-77,82-83,85,91
+  s_fb340f953812c6::t_df125afb4fd21e 149-153
+  s_fb340f953812c6::t_85ff3dddca5bc9 239-241
+  s_fb340f953812c6::t_bfcb7cb973f650 205
+  s_fb340f953812c6::t_54ea05288d3dcd 18-23
+  s_126aec4081f728::t_05de6de540558d 78-79
+docs/adr/README.md
+  s_fb340f953812c6::t_b96d155c302d58 17
+  s_fb340f953812c6::t_8e8584f95534ab 18
+THREAT_MODEL.md
+  s_fb340f953812c6::t_acb4d7fabe9be6 73
+  s_fb340f953812c6::t_c5c4432061ccb1 69
+  s_fb340f953812c6::t_d884d04a1ca274 93
+  s_fb340f953812c6::t_534e0ca43a0f30 215
+  s_fb340f953812c6::t_34edb241008fe1 18
+  s_fb340f953812c6::t_fe34423f375fe4 204
+  s_fb340f953812c6::t_6c29ee54ea67f5 240
+  s_fb340f953812c6::t_83938be39b8ef8 213
+  s_fb340f953812c6::t_82b382cba1ced3 118
+  s_fb340f953812c6::t_6215c77ec51119 122
+  s_fb340f953812c6::t_9aa8ff6ca1d2a9 120
+  s_fb340f953812c6::t_9e6790255a9b0b 152-153
+  s_fb340f953812c6::t_8c4f7594f31d70 154-156
+  s_fb340f953812c6::t_de55c40b07f962 224
+  s_fb340f953812c6::t_bd7a134bc6b3f5 174
+  s_fb340f953812c6::t_4536d10d91bbdd 221-223
+internal/executor/guard_test.go
+  s_fb340f953812c6::t_f1bfc1246b2fa5 64-67,73-74,76-77
+  s_fb340f953812c6::t_d61450eeeca739 6,8-9
+  s_fb340f953812c6::t_29b55c14a9459f 20-23,78,126
+  s_fb340f953812c6::t_910a2090959912 60-63,69-71,75,79-83,111,113-125,127-131,133-142
+internal/agent/conversation_test.go
+  s_fb340f953812c6::t_5cb4cf049d42c4 199,208-247
+  s_fb340f953812c6::t_d360de93f1098a 161-165,177-192
+  s_fb340f953812c6::t_fdb9c31346a879 200-207
+  s_fb340f953812c6::t_14065eb98bf101 4
+  s_fb340f953812c6::t_5d35b62e6bfde0 194-197
+internal/agent/agent_test.go
+  s_fb340f953812c6::t_360c5d48ccfa16 11
+  s_fb340f953812c6::t_1d8c30d3c22e56 510-550,555-557
+  s_fb340f953812c6::t_29a8274bb5fa98 417-418
+  s_fb340f953812c6::t_422681e09d976a 551-554
+  s_fb340f953812c6::t_f636f089d08b31 10,313,344-345,347-349,351-352,355-359,391,425,434,558-671
+internal/executor/process.go
+  s_fb340f953812c6::t_2379659bc2747c 34-39
+internal/security/commandpolicy_test.go
+  s_fb340f953812c6::t_5cfb436fa48d9d 331-343
+  s_fb340f953812c6::t_3501c07c40defc 353-355,359-362
+  s_fb340f953812c6::t_c0cb462cb70959 282,284-288,294-306
+  s_fb340f953812c6::t_d8521744707ebe 370,372
+  s_fb340f953812c6::t_850822c043f5cd 4-262,384-393
+  s_fb340f953812c6::t_887f763f8f48ae 263-265,267-281,283,289-293,307-330,344-352,356-358,363-369,371,373-383,394
+  s_fb340f953812c6::t_8f5badb42924ea 266
+internal/connect/allowlist.go
+  s_fb340f953812c6::t_d2b594d242cbfd 7-11
+internal/agent/health.go
+  s_fb340f953812c6::t_23a72ea0bb348b 19-21
+internal/connect/wmcp.go
+  s_fb340f953812c6::t_458dc6f3aba815 9
+  s_fb340f953812c6::t_319e351098b1a2 186-191,198
+  s_fb340f953812c6::t_9ca6f63f444c1a 29-34,42-43
+  s_fb340f953812c6::t_cf7eac0ed31c45 286-289,296,300-302,304-309
+  s_fb340f953812c6::t_1bb34f6fb737ee 17-22
+  s_fb340f953812c6::t_dbe771ebdd3692 151-152
+  s_5cd1b28ed520c1::t_0095c08815d545 44-46,73,80,87,95,98,261
+internal/connect/native_test.go
+  s_fb340f953812c6::t_d351b62784a976 45,54
+  s_fb340f953812c6::t_971dd8d7cb0431 17,27
+internal/agent/agent.go
+  s_fb340f953812c6::t_eea58bc20e465f 158-159,165-174
+  s_fb340f953812c6::t_3eb093f35f3188 235-239
+  s_fb340f953812c6::t_ef28f0226f3d06 70-73,84-93
+  s_fb340f953812c6::t_3eca90e99f68da 367-377,390-411
+  s_fb340f953812c6::t_e5210ffca57583 43
+  s_fb340f953812c6::t_95af9bb3613862 431
+  s_fb340f953812c6::t_b376bc5e405e31 254-258,260,263,268
+  s_fb340f953812c6::t_78d6dd275648ad 496-497
+  s_fb340f953812c6::t_9ea4f1cc3500d8 94-95,412,586-590,592-594,596
+  s_fb340f953812c6::t_85ecd4c68e76e0 298-301
+  s_fb340f953812c6::t_e9125a6d1ff72c 187
+internal/connect/allowlist_test.go
+  s_fb340f953812c6::t_72f1a094c3c281 65-69,72,74-81
+internal/connect/wmcp_integration_test.go
+  s_fb340f953812c6::t_09ed156eb75303 199,202-286
+  s_fb340f953812c6::t_10c2e8e1f828a4 120-125
+  s_fb340f953812c6::t_fddc74938cc8c4 90,92-94
+  s_fb340f953812c6::t_25817fe2fd4ce7 194-198,200-201
+internal/connect/native.go
+  s_fb340f953812c6::t_46497dc068414e 18-22,24-29,33,35-37
+internal/executor/sysinfo.go
+  s_fb340f953812c6::t_47a7a592a68f60 12-16
+CHANGELOG.md
+  s_fb340f953812c6::t_ed650536537aa5 93-106
+  s_fb340f953812c6::t_f208a0f53fba2b 79-92
+  s_fb340f953812c6::t_2e0f1f10006b53 107-109
+  s_fb340f953812c6::t_feed0149d570fe 10-24,42-47,62-78,110-118
+  s_fb340f953812c6::t_d33316e0e02852 25-41
+  s_fb340f953812c6::t_3db30da6684a1f 48-61
+internal/config/config.go
+  s_fb340f953812c6::t_7123554d2507e7 119-122
+  s_fb340f953812c6::t_2ec200897889e3 5,8
+  s_fb340f953812c6::t_cb093bcc1b4e77 328-381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "729ad420f6bd97ff086c3b78de786b70dc0ebe16",
+  "prompts": {},
+  "sessions": {
+    "s_126aec4081f728": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "27423376-a69e-4c48-a6dc-36ba96a5574e",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_5cd1b28ed520c1": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "82e2267c-23d5-4c0c-8d96-7d91a00e70c4",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    },
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    }
+  }
+}
