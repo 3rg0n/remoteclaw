@@ -9,7 +9,11 @@ import (
 )
 
 // systemInfo returns system information about the local machine.
-func (e *Executor) systemInfo(ctx context.Context, params map[string]any) (*ToolResult, error) {
+//
+// The context is unused past the entry check in Execute: every field comes from
+// runtime or a single non-blocking syscall, so there is no point during it at
+// which cancellation could be observed.
+func (e *Executor) systemInfo(_ context.Context, params map[string]any) (*ToolResult, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = "unknown"

@@ -40,6 +40,7 @@ type Agent struct {
 	conversations  *ConversationManager
 	rateLimiter    *security.RateLimiter
 	challengeStore *security.ChallengeStore
+	allowlist      *connect.Allowlist
 	mu             sync.RWMutex
 	lastMsg        time.Time
 	startTime      time.Time
@@ -66,14 +67,10 @@ func New(cfg *config.Config) (*Agent, error) {
 	// Create executor with config timeouts
 	exec := executor.New(cfg.Execution.DefaultTimeout, cfg.Execution.MaxTimeout, cfg.Execution.Shell)
 
-	// Wire dangerous command checker into executor
-	if cfg.Security.DangerousCommands {
-		exec.SetDangerousChecker(security.NewDangerousChecker())
-		logger.Info().Msg("Dangerous command checker enabled")
-	}
-
-	// Wire the config/secret lockdown guard. The authoritative protection is the
-	// OS (config/secrets owned by root, unreadable by the low-privilege service
+	// Wire the config/secret lockdown guard. It owns the path-based denial for
+	// the file tools, and canonicalizes the protected paths the command policy
+	// below matches against. The authoritative protection is the OS
+	// (config/secrets owned by root, unreadable by the low-privilege service
 	// account — set up by the installer); this guard is in-process
 	// defense-in-depth. Disabled only when the operator opts out to "wide open".
 	guard := executor.NewGuard(cfg.Security.Lockdown, lockdownPaths(cfg))
@@ -82,6 +79,18 @@ func New(cfg *config.Config) (*Agent, error) {
 		logger.Info().Msg("Config/secret lockdown enabled — agent tools cannot read or modify config/secrets")
 	} else {
 		logger.Warn().Msg("Config/secret lockdown DISABLED (security.lockdown=false) — agent tools may access config and secrets")
+	}
+
+	// One deny-list engine for execute_command, carrying both rule groups: the
+	// destructive-command rules (confirmable via challenge-response) and the
+	// config/secret-read rules (hard denials). See ADR 0006.
+	exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{
+		BlockDangerous:   cfg.Security.DangerousCommands,
+		BlockSecretReads: guard.Enabled(),
+		ProtectedPaths:   guard.ProtectedPaths(),
+	}))
+	if cfg.Security.DangerousCommands {
+		logger.Info().Msg("Dangerous command checker enabled")
 	}
 
 	// Create audit logger
@@ -146,13 +155,23 @@ func New(cfg *config.Config) (*Agent, error) {
 		})
 	}
 
-	// Create the appropriate connection mode
+	// Create the appropriate connection mode. Modes carry no authorization
+	// logic: the allowlist below is the single choke point every mode feeds.
 	var mode connect.Mode
 	switch cfg.Mode {
 	case "wmcp":
 		mode = connect.NewWMCPMode(cfg.WMCP.Endpoint, cfg.WMCP.Token, logger)
 	default: // native
-		mode = connect.NewNativeMode(cfg.Webex.BotToken, cfg.Webex.AllowedEmails, logger)
+		mode = connect.NewNativeMode(cfg.Webex.BotToken, logger)
+	}
+
+	// webex.allowed_emails is the authorization list for every mode, not just
+	// native. Warn when it is empty, since that means "allow any direct sender".
+	allowlist := connect.NewAllowlist(cfg.Webex.AllowedEmails)
+	if len(cfg.Webex.AllowedEmails) == 0 {
+		logger.Warn().Msg("webex.allowed_emails is empty — any sender in a 1:1 space may run commands; group and relay senders are denied")
+	} else {
+		logger.Info().Int("count", len(cfg.Webex.AllowedEmails)).Msg("Sender allowlist enabled")
 	}
 
 	agent := &Agent{
@@ -165,6 +184,7 @@ func New(cfg *config.Config) (*Agent, error) {
 		conversations:  conversations,
 		rateLimiter:    rateLimiter,
 		challengeStore: challengeStore,
+		allowlist:      allowlist,
 		startTime:      time.Now(),
 	}
 
@@ -212,10 +232,11 @@ func newConverser(provider string, cfg *config.Config) (ai.Converser, error) {
 
 // executeToolGuarded is the single command-gating path shared by the AI
 // processor loop and (indirectly) the passthrough handler. It runs a tool
-// through the executor — which applies the dangerous-command checker for
-// execute_command — and, when a command is blocked and challenge-response is
-// enabled, records a pending challenge keyed by the space and returns a
-// confirmation prompt instead of the raw block error. All security guardrails
+// through the executor — which applies the command policy for
+// execute_command — and, when a *confirmable* command is blocked and
+// challenge-response is enabled, records a pending challenge keyed by the space
+// and returns a confirmation prompt instead of the raw block error. Hard
+// denials get no confirmation path. All security guardrails
 // are enforced here regardless of caller, so interpret and passthrough modes
 // gate identically.
 func executeToolGuarded(
@@ -230,19 +251,21 @@ func executeToolGuarded(
 		return "", err
 	}
 
-	// When a command is blocked and challenge-response is enabled, store the
-	// pending challenge and ask the user to confirm.
+	// When a command is blocked by a *confirmable* policy rule and
+	// challenge-response is enabled, store the pending challenge and ask the
+	// user to confirm. Hard denials (config/secret access) get no confirmation
+	// path — the reply would travel over the same channel whose credentials the
+	// lockdown protects — so they fall through to the plain error below.
 	if toolName == "execute_command" && challengeStore.Enabled() &&
-		result.ExitCode == 1 && strings.HasPrefix(result.Error, "Command blocked:") {
+		result.Denial != nil && result.Denial.Disposition == security.DispositionChallenge {
 		if cmd, ok := params["command"].(string); ok {
 			if spaceID, ok := ctx.Value(spaceIDKey).(string); ok {
-				reason := strings.TrimPrefix(result.Error, "Command blocked: ")
-				challengeStore.SetPending(spaceID, cmd, reason)
+				challengeStore.SetPending(spaceID, cmd, result.Denial.Reason)
 				return fmt.Sprintf(
 					"Command blocked: %s\n\nThis command requires confirmation. "+
 						"Reply with the challenge response to proceed. "+
 						"The confirmation expires in 2 minutes.",
-					reason,
+					result.Denial.Reason,
 				), nil
 			}
 		}
@@ -272,6 +295,10 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	// Start health check server if enabled
 	if a.cfg.Health.Enabled {
+		if a.cfg.Health.AllowNonLoopback {
+			a.logger.Warn().Str("addr", a.cfg.Health.Addr).
+				Msg("health.allow_non_loopback is set: the unauthenticated health endpoint may be reachable from the network")
+		}
 		if err := a.startHealthServer(a.cfg.Health.Addr); err != nil {
 			a.logger.Error().Err(err).Msg("Failed to start health server")
 			// Don't exit, health server is optional
@@ -337,6 +364,17 @@ func (a *Agent) Run(ctx context.Context) error {
 	return nil
 }
 
+// authorize is the single authorization decision for inbound messages,
+// regardless of connection mode. Keeping it here rather than in each Mode means
+// a new Mode cannot silently ship without authz — which is exactly how wmcp mode
+// ran unauthorized through v0.6.0. Fails closed: a nil allowlist denies.
+func (a *Agent) authorize(msg connect.IncomingMessage) bool {
+	if a.allowlist == nil {
+		return false
+	}
+	return a.allowlist.IsAllowedInRoom(msg.Email, msg.RoomType)
+}
+
 // messageHandler processes incoming messages from Webex/WMCP
 func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage) {
 	start := time.Now()
@@ -348,6 +386,29 @@ func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage)
 		Str("email", msg.Email).
 		Str("text", msg.Text).
 		Msg("Message received")
+
+	// Authorization first: an unauthorized sender must not reach the rate
+	// limiter, the challenge store, or the executor, and gets no reply that
+	// would confirm the bot is listening.
+	if !a.authorize(msg) {
+		a.logger.Warn().
+			Str("email", msg.Email).
+			Str("spaceID", msg.SpaceID).
+			Str("roomType", msg.RoomType).
+			Msg("Message from unauthorized sender, ignoring")
+		if a.audit != nil {
+			a.audit.Log(logging.AuditEntry{
+				Timestamp:  start,
+				Email:      msg.Email,
+				SpaceID:    msg.SpaceID,
+				RawMessage: msg.Text,
+				Response:   "denied: sender not in webex.allowed_emails",
+				Duration:   time.Since(start),
+				Error:      "unauthorized sender",
+			})
+		}
+		return
+	}
 
 	// Check rate limit before processing
 	if a.rateLimiter != nil && !a.rateLimiter.Allow(msg.SpaceID) {
@@ -367,7 +428,7 @@ func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage)
 	// Passthrough mode: execute the message directly as a command with no
 	// local inference. Rate limiting, allowlist, and the challenge-response
 	// check above have already run; the command itself is gated by the same
-	// dangerous-command checker and challenge-response path as the AI loop.
+	// command policy and challenge-response path as the AI loop.
 	if a.processor == nil {
 		a.handlePassthrough(ctx, msg, start)
 		return
@@ -432,8 +493,8 @@ func (a *Agent) messageHandler(ctx context.Context, msg connect.IncomingMessage)
 
 // handlePassthrough runs an inbound message directly as a shell command with
 // no local inference (Webex-as-SSH). It routes through the same guarded path
-// as the AI loop, so the dangerous-command checker and challenge-response
-// confirmation apply identically; a blocked command returns a confirmation
+// as the AI loop, so the command policy and challenge-response confirmation
+// apply identically; a confirmable blocked command returns a confirmation
 // prompt rather than executing.
 func (a *Agent) handlePassthrough(ctx context.Context, msg connect.IncomingMessage, start time.Time) {
 	command := strings.TrimSpace(msg.Text)
@@ -522,20 +583,15 @@ func (a *Agent) handleChallengeConfirmation(ctx context.Context, msg connect.Inc
 	}
 }
 
-// getUsername retrieves the current username
+// getUsername retrieves the current username for the system prompt.
+//
+// No env-var fallback: $USER/$USERNAME are caller-controlled and are unset or
+// wrong in exactly the contexts RemoteClaw runs in (systemd unit, LaunchAgent,
+// Windows scheduled task), so they are worse than admitting we don't know.
 func getUsername() string {
-	// Try os/user first for cross-platform support
-	if currentUser, err := user.Current(); err == nil {
-		return currentUser.Username
+	currentUser, err := user.Current()
+	if err != nil {
+		return "unknown"
 	}
-
-	// Fall back to environment variables
-	if username := os.Getenv("USER"); username != "" {
-		return username
-	}
-	if username := os.Getenv("USERNAME"); username != "" {
-		return username
-	}
-
-	return "unknown"
+	return currentUser.Username
 }

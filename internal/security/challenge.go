@@ -50,7 +50,7 @@ type ChallengeStore struct {
 	mu         sync.Mutex
 	pending    map[string]*PendingChallenge // keyed by spaceID
 	attempts   map[string]int               // failed attempt count per spaceID
-	stopCh     chan struct{}                 // signals cleanup goroutine to stop
+	stopCh     chan struct{}                // signals cleanup goroutine to stop
 }
 
 // NewChallengeStore creates a challenge store with the given encrypted challenge value.
@@ -149,13 +149,6 @@ func (cs *ChallengeStore) CheckResponse(spaceID, text string) (*PendingChallenge
 	delete(cs.pending, spaceID)
 	delete(cs.attempts, spaceID)
 	return pc, true
-}
-
-// ClearPending removes any pending challenge for the given space.
-func (cs *ChallengeStore) ClearPending(spaceID string) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	delete(cs.pending, spaceID)
 }
 
 // Close stops the background cleanup goroutine.

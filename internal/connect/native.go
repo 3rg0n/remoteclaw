@@ -15,24 +15,26 @@ import (
 
 // NativeMode implements Mode using direct Webex access via Mercury WebSocket
 // for receiving messages and the REST API for sending.
+//
+// Authorization is not performed here: the email allowlist is enforced at the
+// single choke point in Agent.messageHandler, which every Mode feeds. A Mode's
+// job is to report provenance accurately (Email, RoomType) so that choke point
+// can decide.
 type NativeMode struct {
-	botToken  string
-	allowlist *Allowlist
-	handler   MessageHandler
-	logger    zerolog.Logger
-	receiver  *webexhandler.WebexMessageHandler
-	sender    *WebexSender
-	botName   string // resolved from /people/me, used to strip mentions
+	botToken string
+	handler  MessageHandler
+	logger   zerolog.Logger
+	receiver *webexhandler.WebexMessageHandler
+	sender   *WebexSender
+	botName  string // resolved from /people/me, used to strip mentions
 }
 
 // NewNativeMode creates a new NativeMode instance.
-// allowedEmails controls who may interact with the bot (empty = allow all).
-func NewNativeMode(botToken string, allowedEmails []string, logger zerolog.Logger) *NativeMode {
+func NewNativeMode(botToken string, logger zerolog.Logger) *NativeMode {
 	return &NativeMode{
-		botToken:  botToken,
-		allowlist: NewAllowlist(allowedEmails),
-		logger:    logger,
-		sender:    NewWebexSender(botToken),
+		botToken: botToken,
+		logger:   logger,
+		sender:   NewWebexSender(botToken),
 	}
 }
 
@@ -59,15 +61,6 @@ func (nm *NativeMode) Connect(ctx context.Context) error {
 
 	// Register message callback
 	nm.receiver.OnMessageCreated(func(msg webexhandler.DecryptedMessage) {
-		// Check allowlist — in group rooms, require explicit authorization
-		if !nm.allowlist.IsAllowedInRoom(msg.PersonEmail, msg.RoomType) {
-			nm.logger.Warn().
-				Str("email", msg.PersonEmail).
-				Str("roomType", msg.RoomType).
-				Msg("Message from non-authorized email, ignoring")
-			return
-		}
-
 		text := msg.Text
 
 		// In group spaces, strip the bot @mention from the beginning of the message.

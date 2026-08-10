@@ -1,0 +1,25 @@
+# Line endings are pinned here rather than left to each clone's core.autocrlf.
+#
+# Without this file, a Windows clone with core.autocrlf=true has a CRLF working
+# tree while git stores LF, and `gofmt -l .` reports every Go file as
+# misformatted — 29 of 58, 21 of them pure CRLF artifacts. That noise hid real
+# formatting drift and would make the CI fmt gate either unusable or falsely
+# green depending on the runner's OS.
+
+# Default: git decides what is text, and text checks out with LF everywhere.
+* text=auto eol=lf
+
+# Explicit for the formats the repo actually contains, so the rule does not
+# depend on git's content heuristic.
+*.go     text eol=lf
+*.md     text eol=lf
+*.yml    text eol=lf
+*.yaml   text eol=lf
+*.sh     text eol=lf
+go.mod   text eol=lf
+go.sum   text eol=lf
+Makefile text eol=lf
+
+# PowerShell is Windows-native tooling, and some older hosts mishandle LF-only
+# script files, so its scripts stay CRLF in the working tree.
+*.ps1    text eol=crlf

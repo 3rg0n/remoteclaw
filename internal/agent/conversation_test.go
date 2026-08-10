@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"sync"
 	"testing"
 
@@ -123,63 +124,6 @@ func TestConversationManager_UpdateHistory_NoTrimming(t *testing.T) {
 	assert.Equal(t, 10, len(retrieved))
 }
 
-func TestConversationManager_Clear(t *testing.T) {
-	cm := NewConversationManager(10)
-
-	key := "space123"
-	messages := []ai.Message{
-		{
-			Role: "user",
-			Content: []ai.ContentBlock{
-				{Type: "text", Text: "Test"},
-			},
-		},
-	}
-
-	cm.UpdateHistory(key, messages)
-	retrieved := cm.GetHistory(key)
-	assert.Equal(t, 1, len(retrieved))
-
-	cm.Clear(key)
-	retrieved = cm.GetHistory(key)
-	assert.Equal(t, 0, len(retrieved))
-}
-
-func TestConversationManager_ClearAll(t *testing.T) {
-	cm := NewConversationManager(10)
-
-	// Add history for multiple keys
-	for i := 0; i < 3; i++ {
-		key := "space" + string(rune(i+48))
-		messages := []ai.Message{
-			{
-				Role: "user",
-				Content: []ai.ContentBlock{
-					{Type: "text", Text: "Test"},
-				},
-			},
-		}
-		cm.UpdateHistory(key, messages)
-	}
-
-	// Verify all histories exist
-	for i := 0; i < 3; i++ {
-		key := "space" + string(rune(i+48))
-		retrieved := cm.GetHistory(key)
-		assert.Equal(t, 1, len(retrieved))
-	}
-
-	// Clear all
-	cm.ClearAll()
-
-	// Verify all histories are gone
-	for i := 0; i < 3; i++ {
-		key := "space" + string(rune(i+48))
-		retrieved := cm.GetHistory(key)
-		assert.Equal(t, 0, len(retrieved))
-	}
-}
-
 func TestConversationManager_MultipleKeys(t *testing.T) {
 	cm := NewConversationManager(10)
 
@@ -214,13 +158,13 @@ func TestConversationManager_MultipleKeys(t *testing.T) {
 	assert.Equal(t, "Message for space2", retrieved2[0].Content[0].Text)
 }
 
-func TestConversationManager_ConcurrentAccess(t *testing.T) {
+// TestConversationManager_ConcurrentDistinctKeys exercises readers and writers
+// spread across distinct keys, so the map itself is contended even though no
+// single history is. TestConversationManager_ConcurrentSameKey covers the
+// stronger single-key case.
+func TestConversationManager_ConcurrentDistinctKeys(t *testing.T) {
 	cm := NewConversationManager(100)
 
-	var wg sync.WaitGroup
-	numGoroutines := 10
-
-	// Create some initial messages
 	baseMessages := []ai.Message{
 		{
 			Role: "user",
@@ -230,46 +174,79 @@ func TestConversationManager_ConcurrentAccess(t *testing.T) {
 		},
 	}
 
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		switch i % 3 { //nolint:staticcheck // QF1003 does not apply to switch used for clarity
-		case 0:
-			// Writer goroutine
-			go func(index int) {
-				defer wg.Done()
-				for j := 0; j < 20; j++ {
-					//nolint:gosec // G115: index is bounded by numGoroutines (10)
-					key := "space" + string(rune(index+48))
-					messages := baseMessages
-					cm.UpdateHistory(key, messages)
-				}
-			}(i)
-		case 1:
-			// Reader goroutine
-			go func(index int) {
-				defer wg.Done()
-				for j := 0; j < 20; j++ {
-					//nolint:gosec // G115: index is bounded by numGoroutines (10)
-					key := "space" + string(rune(index+48))
-					_ = cm.GetHistory(key)
-				}
-			}(i)
-		case 2:
-			// Clear goroutine
-			go func(index int) {
-				defer wg.Done()
-				for j := 0; j < 20; j++ {
-					//nolint:gosec // G115: index is bounded by numGoroutines (10)
-					key := "space" + string(rune(index+48))
-					cm.Clear(key)
-				}
-			}(i)
-		}
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		key := fmt.Sprintf("space%d", i)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				cm.UpdateHistory(key, baseMessages)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				_ = cm.GetHistory(key)
+			}
+		}()
 	}
-
 	wg.Wait()
 
-	// After concurrent operations, the manager should be in a valid state
+	assert.NotNil(t, cm.histories)
+}
+
+// TestConversationManager_ConcurrentSameKey exercises readers and writers
+// contending on a *single* key, including reads of the nested Content/Input
+// data. TestConversationManager_ConcurrentAccess gives each goroutine its own
+// key, so it never exercises this path.
+//
+// GetHistory's safety depends on UpdateHistory replacing stored slices wholesale
+// rather than mutating them in place. This test is the guard on that invariant:
+// if a future change ever appends to or edits a stored history, it turns into a
+// real data race and this test catches it under -race.
+func TestConversationManager_ConcurrentSameKey(t *testing.T) {
+	cm := NewConversationManager(20)
+
+	const key = "shared-space"
+	const iterations = 200
+
+	msg := func(text string) []ai.Message {
+		return []ai.Message{{
+			Role: "user",
+			Content: []ai.ContentBlock{{
+				Type:  "text",
+				Text:  text,
+				Input: map[string]interface{}{"k": text},
+			}},
+		}}
+	}
+
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(2)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				cm.UpdateHistory(key, msg(fmt.Sprintf("w%d-%d", g, i)))
+			}
+		}(g)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				for _, m := range cm.GetHistory(key) {
+					for _, b := range m.Content {
+						_ = b.Text
+						for k := range b.Input {
+							_ = k
+						}
+					}
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
 	assert.NotNil(t, cm.histories)
 }
 

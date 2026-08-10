@@ -22,10 +22,10 @@ import (
 
 // CapturingMode is a mock Mode that captures sent messages
 type CapturingMode struct {
-	mu          sync.Mutex
-	handler     connect.MessageHandler
-	sentMsgs    []capturedMessage
-	connectErr  error
+	mu         sync.Mutex
+	handler    connect.MessageHandler
+	sentMsgs   []capturedMessage
+	connectErr error
 }
 
 type capturedMessage struct {
@@ -69,7 +69,7 @@ func newTestAgent(t *testing.T, converser ai.Converser, opts ...func(*Agent)) *A
 	}
 
 	exec := executor.New(30*time.Second, 5*time.Minute, "")
-	exec.SetDangerousChecker(security.NewDangerousChecker())
+	exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{BlockDangerous: true}))
 
 	processor := ai.NewProcessor(ai.ProcessorConfig{
 		Converser:     converser,
@@ -100,7 +100,11 @@ func newTestAgent(t *testing.T, converser ai.Converser, opts ...func(*Agent)) *A
 		logger:        logging.Get(),
 		conversations: NewConversationManager(20),
 		rateLimiter:   security.NewRateLimiter(10, 3),
-		startTime:     time.Now(),
+		// Empty allowlist: permissive only for direct messages, which is what
+		// these tests send (RoomType "direct" — an unset room type fails closed).
+		// Mirrors production wiring in New().
+		allowlist: connect.NewAllowlist(nil),
+		startTime: time.Now(),
 	}
 
 	for _, opt := range opts {
@@ -127,12 +131,12 @@ func TestIntegration_FullMessageFlow(t *testing.T) {
 
 	// Send first message
 	agent.messageHandler(ctx, connect.IncomingMessage{
-		ID: "msg-1", SpaceID: "space-1", Email: "user@test.com", Text: "check system",
+		ID: "msg-1", SpaceID: "space-1", Email: "user@test.com", Text: "check system", RoomType: "direct",
 	})
 
 	// Send second message to same space (should use conversation history)
 	agent.messageHandler(ctx, connect.IncomingMessage{
-		ID: "msg-2", SpaceID: "space-1", Email: "user@test.com", Text: "what was the result?",
+		ID: "msg-2", SpaceID: "space-1", Email: "user@test.com", Text: "what was the result?", RoomType: "direct",
 	})
 
 	sent := mode.getSentMessages()
@@ -165,7 +169,7 @@ func TestIntegration_RateLimiting(t *testing.T) {
 	// Send burst of messages
 	for i := 0; i < 5; i++ {
 		agent.messageHandler(ctx, connect.IncomingMessage{
-			ID: "msg", SpaceID: "space-rl", Email: "user@test.com", Text: "request",
+			ID: "msg", SpaceID: "space-rl", Email: "user@test.com", Text: "request", RoomType: "direct",
 		})
 	}
 
@@ -205,7 +209,7 @@ func TestIntegration_AuditLogging(t *testing.T) {
 
 	ctx := context.Background()
 	agent.messageHandler(ctx, connect.IncomingMessage{
-		ID: "msg-1", SpaceID: "space-audit", Email: "admin@test.com", Text: "do something",
+		ID: "msg-1", SpaceID: "space-audit", Email: "admin@test.com", Text: "do something", RoomType: "direct",
 	})
 
 	// Close audit to flush
@@ -278,7 +282,7 @@ func TestIntegration_DangerousCommandBlocking(t *testing.T) {
 		MaxIterations: 5,
 		ExecuteTool: func(ctx context.Context, toolName string, params map[string]any) (string, error) {
 			exec := executor.New(30*time.Second, 5*time.Minute, "")
-			exec.SetDangerousChecker(security.NewDangerousChecker())
+			exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{BlockDangerous: true}))
 			result, err := exec.Execute(ctx, toolName, params)
 			if err != nil {
 				return "", err
@@ -293,7 +297,7 @@ func TestIntegration_DangerousCommandBlocking(t *testing.T) {
 
 	ctx := context.Background()
 	agent.messageHandler(ctx, connect.IncomingMessage{
-		ID: "msg-1", SpaceID: "space-danger", Email: "user@test.com", Text: "delete everything",
+		ID: "msg-1", SpaceID: "space-danger", Email: "user@test.com", Text: "delete everything", RoomType: "direct",
 	})
 
 	sent := mode.getSentMessages()
@@ -314,7 +318,7 @@ func TestIntegration_ErrorHandling(t *testing.T) {
 
 	ctx := context.Background()
 	agent.messageHandler(ctx, connect.IncomingMessage{
-		ID: "msg-1", SpaceID: "space-err", Email: "user@test.com", Text: "hello",
+		ID: "msg-1", SpaceID: "space-err", Email: "user@test.com", Text: "hello", RoomType: "direct",
 	})
 
 	sent := mode.getSentMessages()
@@ -362,7 +366,7 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 		MaxIterations: 5,
 		ExecuteTool: func(ctx context.Context, toolName string, params map[string]any) (string, error) {
 			exec := executor.New(30*time.Second, 5*time.Minute, "")
-			exec.SetDangerousChecker(security.NewDangerousChecker())
+			exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{BlockDangerous: true}))
 			result, err := exec.Execute(ctx, toolName, params)
 			if err != nil {
 				return "", err
@@ -390,7 +394,7 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 
 	// Step 1: User sends a message that triggers a dangerous command
 	agent.messageHandler(ctx, connect.IncomingMessage{
-		ID: "msg-1", SpaceID: "space-chal", Email: "user@test.com", Text: "delete old files",
+		ID: "msg-1", SpaceID: "space-chal", Email: "user@test.com", Text: "delete old files", RoomType: "direct",
 	})
 
 	sent := mode.getSentMessages()
@@ -400,12 +404,12 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 
 	// Step 2: User replies with the wrong challenge
 	agent.messageHandler(ctx, connect.IncomingMessage{
-		ID: "msg-2", SpaceID: "space-chal", Email: "user@test.com", Text: "wrong-code",
+		ID: "msg-2", SpaceID: "space-chal", Email: "user@test.com", Text: "wrong-code", RoomType: "direct",
 	})
 
 	// Step 3: User replies with the correct challenge
 	agent.messageHandler(ctx, connect.IncomingMessage{
-		ID: "msg-3", SpaceID: "space-chal", Email: "user@test.com", Text: "confirm-it",
+		ID: "msg-3", SpaceID: "space-chal", Email: "user@test.com", Text: "confirm-it", RoomType: "direct",
 	})
 
 	sent = mode.getSentMessages()

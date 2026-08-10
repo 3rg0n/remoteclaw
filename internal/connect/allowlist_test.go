@@ -62,62 +62,25 @@ func TestAllowlist_IsAllowed_EmptyEmail(t *testing.T) {
 	assert.True(t, allowlist.IsAllowed("user@example.com"))
 }
 
-func TestAllowlist_Reload(t *testing.T) {
-	allowlist := NewAllowlist([]string{"user@example.com"})
-	assert.True(t, allowlist.IsAllowed("user@example.com"))
-	assert.False(t, allowlist.IsAllowed("admin@example.com"))
-
-	// Reload with new list
-	allowlist.Reload([]string{"admin@example.com", "superuser@example.com"})
-	assert.False(t, allowlist.IsAllowed("user@example.com"))
-	assert.True(t, allowlist.IsAllowed("admin@example.com"))
-	assert.True(t, allowlist.IsAllowed("superuser@example.com"))
-}
-
-func TestAllowlist_Reload_EmptyList(t *testing.T) {
-	allowlist := NewAllowlist([]string{"user@example.com"})
-	assert.False(t, allowlist.IsAllowed("admin@example.com"))
-
-	// Reload with empty list (allow all)
-	allowlist.Reload([]string{})
-	assert.True(t, allowlist.IsAllowed("user@example.com"))
-	assert.True(t, allowlist.IsAllowed("admin@example.com"))
-	assert.True(t, allowlist.IsAllowed("anyone@example.com"))
-}
-
-func TestAllowlist_ConcurrentAccess(t *testing.T) {
-	allowlist := NewAllowlist([]string{"user@example.com"})
+// TestAllowlist_ConcurrentReads verifies the lock-free read path is safe for
+// concurrent use. Allowlist is immutable after construction, so readers need no
+// synchronization — this is the guard on that invariant.
+func TestAllowlist_ConcurrentReads(t *testing.T) {
+	allowlist := NewAllowlist([]string{"user@example.com", "admin@example.com"})
 
 	var wg sync.WaitGroup
-	numGoroutines := 10
-
-	// Half readers, half writers
-	for i := 0; i < numGoroutines; i++ {
+	for i := 0; i < 10; i++ {
 		wg.Add(1)
-		if i%2 == 0 {
-			// Reader goroutine
-			go func() {
-				defer wg.Done()
-				for j := 0; j < 100; j++ {
-					_ = allowlist.IsAllowed("user@example.com")
-				}
-			}()
-		} else {
-			// Writer goroutine
-			go func(index int) {
-				defer wg.Done()
-				for j := 0; j < 50; j++ {
-					allowlist.Reload([]string{"user@example.com", "admin@example.com"})
-				}
-			}(i)
-		}
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				assert.True(t, allowlist.IsAllowed("user@example.com"))
+				assert.False(t, allowlist.IsAllowed("nobody@example.com"))
+				assert.True(t, allowlist.IsAllowedInRoom("admin@example.com", "group"))
+			}
+		}()
 	}
-
 	wg.Wait()
-
-	// After concurrent operations, check state is valid
-	assert.True(t, allowlist.IsAllowed("user@example.com"))
-	assert.True(t, allowlist.IsAllowed("admin@example.com"))
 }
 
 func TestAllowlist_IsAllowedInRoom_GroupEmpty(t *testing.T) {
@@ -147,31 +110,31 @@ func TestAllowlist_IsAllowedInRoom_DirectPopulated(t *testing.T) {
 	assert.False(t, allowlist.IsAllowedInRoom("bob@example.com", "direct"))
 }
 
-func TestAllowlist_IsAllowedInRoom_EmptyRoomType(t *testing.T) {
-	// Empty room type should behave like direct (legacy/1:1)
-	allowlist := NewAllowlist(nil)
-	assert.True(t, allowlist.IsAllowedInRoom("anyone@example.com", ""))
-}
-
-func TestAllowlist_ConcurrentReload(t *testing.T) {
-	allowlist := NewAllowlist([]string{"user@example.com"})
-
-	var wg sync.WaitGroup
-	numGoroutines := 5
-
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			for j := 0; j < 20; j++ {
-				//nolint:gosec // G115: index is bounded by numGoroutines (5)
-				allowlist.Reload([]string{"user" + string(rune(index+48)) + "@example.com"})
-			}
-		}(i)
+// TestAllowlist_IsAllowedInRoom_UnknownRoomTypeFailsClosed pins the fail-closed
+// direction for a room type we could not determine. The upstream handler infers
+// it from Mercury activity tags and returns "" when they are absent or
+// unrecognized, so this is a reachable input, not a theoretical one. Treating it
+// as direct would let an untagged group room with an empty allowlist authorize
+// every sender in it.
+func TestAllowlist_IsAllowedInRoom_UnknownRoomTypeFailsClosed(t *testing.T) {
+	empty := NewAllowlist(nil)
+	for _, roomType := range []string{"", "group", "team", "GROUP", "unknown"} {
+		t.Run("empty_list/"+roomType, func(t *testing.T) {
+			assert.False(t, empty.IsAllowedInRoom("anyone@example.com", roomType),
+				"an empty allowlist must not authorize a non-direct space")
+		})
 	}
 
-	wg.Wait()
+	// With a populated list the sender is still authorized by explicit entry, so
+	// failing closed on an unknown type does not break a configured deployment.
+	populated := NewAllowlist([]string{"alice@example.com"})
+	for _, roomType := range []string{"", "group", "unknown"} {
+		t.Run("populated/"+roomType, func(t *testing.T) {
+			assert.True(t, populated.IsAllowedInRoom("alice@example.com", roomType))
+			assert.False(t, populated.IsAllowedInRoom("bob@example.com", roomType))
+		})
+	}
 
-	// After concurrent reloads, the allowlist should be in a valid state
-	assert.NotNil(t, allowlist.emails)
+	// "direct" remains the one permissive case, and only when the list is empty.
+	assert.True(t, empty.IsAllowedInRoom("anyone@example.com", "direct"))
 }

@@ -16,9 +16,10 @@ type healthResponse struct {
 	LastMsg   string `json:"last_message,omitempty"`
 }
 
-// startHealthServer starts an HTTP server on the given address for health checks
+// startHealthServer starts an HTTP server on the given address for health checks.
+// addr is validated as loopback-only by config.Validate unless the operator set
+// health.allow_non_loopback; this function binds whatever it is given.
 func (a *Agent) startHealthServer(addr string) error {
-	// Ensure localhost-only binding for security
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)

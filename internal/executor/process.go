@@ -31,7 +31,12 @@ func (e *Executor) listProcesses(ctx context.Context, params map[string]any) (*T
 
 // killProcess kills a process by PID.
 // Required params: "pid" (number) - the process ID to kill
-func (e *Executor) killProcess(ctx context.Context, params map[string]any) (*ToolResult, error) {
+//
+// The context is unused past the entry check in Execute: signalling a process is
+// a single non-blocking syscall, so there is no point during it at which
+// cancellation could be observed. The entry check is what matters here — it is
+// why an abandoned request does not kill a process nobody is waiting on.
+func (e *Executor) killProcess(_ context.Context, params map[string]any) (*ToolResult, error) {
 	pid, err := getIntParamOpt(params, "pid")
 	if err != nil {
 		return &ToolResult{Error: err.Error(), ExitCode: 1}, nil //nolint:nilerr // error is captured in ToolResult

@@ -2,8 +2,10 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/3rg0n/remoteclaw/internal/logging"
@@ -114,6 +116,10 @@ type SecurityConfig struct {
 type HealthConfig struct {
 	Enabled bool   `mapstructure:"enabled"`
 	Addr    string `mapstructure:"addr"`
+	// AllowNonLoopback permits binding the health endpoint to a non-loopback
+	// address. Off by default: the health server is unauthenticated, so binding
+	// it to 0.0.0.0 exposes agent liveness/last-message metadata to the network.
+	AllowNonLoopback bool `mapstructure:"allow_non_loopback"`
 }
 
 // Load reads and parses a YAML config file, applies defaults, and validates the configuration.
@@ -317,6 +323,60 @@ func (c *Config) Validate() error {
 	// increase non-determinism which can cause intermittent safety bypass.
 	if c.AI.Temperature > 0.3 {
 		c.AI.Temperature = 0.3
+	}
+
+	if err := c.validateHealthAddr(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateHealthAddr rejects a health bind address that is not loopback-only.
+// The health endpoint is unauthenticated, so a typo'd or copy-pasted
+// "0.0.0.0:9090" would silently expose the agent's only listener to the network.
+// Fail closed at config load rather than at listen time.
+func (c *Config) validateHealthAddr() error {
+	if !c.Health.Enabled {
+		return nil
+	}
+
+	host, port, err := net.SplitHostPort(c.Health.Addr)
+	if err != nil {
+		return fmt.Errorf("invalid health.addr %q: %w", c.Health.Addr, err)
+	}
+	if port == "" {
+		return fmt.Errorf("invalid health.addr %q: missing port", c.Health.Addr)
+	}
+	if c.Health.AllowNonLoopback {
+		return nil
+	}
+
+	// An empty host means "all interfaces" (e.g. ":9090") — never loopback-only.
+	if host == "" {
+		return fmt.Errorf(
+			"health.addr %q binds all interfaces; use 127.0.0.1:%s "+
+				"or set health.allow_non_loopback: true to override",
+			c.Health.Addr, port)
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	// Reject hostnames outright rather than resolving them: resolution is not
+	// stable over time, so a name that resolves to loopback today is not a
+	// durable guarantee.
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return fmt.Errorf(
+			"health.addr %q: host must be an IP literal or \"localhost\" "+
+				"(got hostname %q); set health.allow_non_loopback: true to override",
+			c.Health.Addr, host)
+	}
+	if !ip.IsLoopback() {
+		return fmt.Errorf(
+			"health.addr %q binds non-loopback address %s; use 127.0.0.1:%s "+
+				"or set health.allow_non_loopback: true to override",
+			c.Health.Addr, host, port)
 	}
 
 	return nil

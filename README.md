@@ -32,8 +32,11 @@ RemoteClaw is a local agent that lets you remotely control a system via a Webex 
 - **Go 1.26+** (to build from source)
 - **Webex account** with access to [developer.webex.com](https://developer.webex.com)
 - **AI provider** (one of):
-  - [Ollama](https://ollama.com) running locally (default, free)
-  - AWS account with Bedrock access (for Claude)
+  - [inferd](https://github.com/3rg0n/inferd) running locally (default, free) —
+    local inference over a Unix socket / Windows named pipe
+  - Any OpenAI-compatible endpoint (`openai-compat`) — Ollama's `/v1`, vLLM,
+    LM Studio, LocalAI, mantle/Bedrock-as-OpenAI, or OpenAI itself
+  - Neither, if you run `ai.mode: passthrough` (no local inference)
 
 ## Creating a Webex Bot Token
 
@@ -202,9 +205,22 @@ mode: wmcp
 wmcp:
   endpoint: "wss://wmcp.example.com/ws"
   token: "${WMCP_TOKEN}"
+webex:
+  allowed_emails:                   # REQUIRED in wmcp mode — see below
+    - "admin@company.com"
 ```
 
 The WMCP client handles authentication, heartbeats (every 30s), and automatic reconnection with exponential backoff.
+
+> **`allowed_emails` is required in wmcp mode.** The allowlist applies to every
+> connection mode, and relayed senders are held to the strict group-room rule: an
+> empty `allowed_emails` **denies every sender**, so the agent will accept nothing.
+> A relay cannot prove a message came from a 1:1 space, so it does not get the
+> permissive direct-message default. List the emails you want to authorize.
+>
+> Before v0.7.0, `allowed_emails` was silently ignored in wmcp mode and any sender
+> the relay forwarded could run commands. If you ran wmcp mode on an earlier
+> version, review your audit log.
 
 ## AI Providers
 
@@ -237,7 +253,7 @@ uses `openai-compat` when `openai_base_url` is set, otherwise `inferd`.
   tools — the original behavior.
 - **`passthrough`:** the inbound message is executed directly as a command with
   no local inference (Webex-as-SSH), for when a *remote* AI is the brain. All
-  guardrails — dangerous-command checker, challenge-response, rate limit, strict
+  guardrails — command policy, challenge-response, rate limit, strict
   allowlist, audit logging — remain fully active. See
   [ADR 0002](docs/adr/0002-passthrough-mode.md).
 
@@ -245,7 +261,8 @@ uses `openai-compat` when `openai_base_url` is set, otherwise `inferd`.
 
 ### Dangerous Command Blocking
 
-Enabled by default (`dangerous_commands: true`). Blocks commands matching dangerous patterns before execution:
+Enabled by default (`dangerous_commands: true`). Blocks commands matching dangerous
+patterns before execution. Matching is case-insensitive.
 
 - Recursive root deletion (`rm -rf /`, `del /s /q C:\`)
 - Disk formatting (`mkfs`, `format`, `dd of=/dev/`)
@@ -253,12 +270,29 @@ Enabled by default (`dangerous_commands: true`). Blocks commands matching danger
 - Privilege escalation (`sudo`, `runas`, `su -`)
 - Remote code execution via pipe (`curl ... | sh`)
 - System shutdown/reboot
+- Shell indirection that runs a computed command — `eval`, `exec` in command
+  position, `find -exec`, a `$(...)`/backtick substitution whose output becomes the
+  command or a destructive command's argument
+
+Matching is position-aware, so ordinary commands that merely *contain* one of these
+words are allowed: `docker exec -it web sh` and `echo $(date)` run normally.
+
+These are **confirmable**: you own the machine, so the block is proof of intent, not
+prohibition — see Challenge-Response below.
+
+Separately, when `lockdown: true` (the default) commands that read RemoteClaw's own
+config or secrets are **refused outright, with no confirmation path** — `pass show`,
+`gpg -d`, `printenv`/`env` against a secret variable, `/proc/self/environ`, and reads
+of the config/`.env`/secret-store paths. A challenge reply would travel over the same
+chat channel whose credentials the lockdown protects, so confirming is not offered;
+these require local administration. See
+[ADR 0006](docs/adr/0006-one-command-policy-with-tagged-rules.md).
 
 When a command is blocked, the AI is told why and relays the explanation to the user.
 
 ### Challenge-Response Confirmation
 
-When `CHALLENGE` is set, destructive commands require the user to reply with the correct challenge response. The confirmation expires after 2 minutes.
+When `CHALLENGE` is set, destructive commands require the user to reply with the correct challenge response. The confirmation expires after 2 minutes. Config/secret reads are *not* confirmable — see above.
 
 ```bash
 # .env
@@ -283,7 +317,9 @@ security:
 
 ### Allowed Emails
 
-Controls who can interact with the bot. Case-insensitive matching.
+Controls who can interact with the bot. Case-insensitive matching. Applies to
+**both** `native` and `wmcp` mode — the check runs in the agent, before the rate
+limiter or any command execution, so it cannot be bypassed by the connection mode.
 
 ```yaml
 webex:
@@ -294,7 +330,14 @@ webex:
 
 - **Empty list + direct message**: Anyone can message the bot
 - **Empty list + group room**: No one can use the bot (strict enforcement in rooms)
-- **Populated list**: Only listed emails can interact, in any space type
+- **Empty list + wmcp relay**: No one can use the bot — relayed senders are treated
+  as group-room senders, since a relay cannot prove a message came from a 1:1 space
+- **Empty list + space we cannot classify**: No one can use the bot. Only a space
+  positively identified as 1:1 gets the permissive reading; anything else is denied
+- **Populated list**: Only listed emails can interact, in any space type or mode
+
+Leaving `allowed_emails` empty is only safe if you also accept that anyone who can
+open a 1:1 space with your bot can run commands on the host. Set it.
 
 ### Audit Logging
 
@@ -316,7 +359,7 @@ mode: native                        # "native" or "wmcp"
 
 webex:
   bot_token: "${WEBEX_BOT_TOKEN}"   # Bot access token from developer.webex.com
-  allowed_emails: []                # Email allowlist (empty = allow all in direct, deny all in rooms)
+  allowed_emails: []                # Email allowlist, all modes (empty = allow all in direct; deny all in rooms and wmcp)
 
 wmcp:
   endpoint: ""                      # WMCP WebSocket endpoint
@@ -351,8 +394,18 @@ logging:
 
 health:
   enabled: true                     # Enable health check endpoint
-  addr: "127.0.0.1:9090"           # Health check listen address
+  addr: "127.0.0.1:9090"           # Health check listen address (must be loopback)
+  allow_non_loopback: false         # Allow binding a non-loopback address (see below)
 ```
+
+The health endpoint is unauthenticated, so `health.addr` must be a loopback
+address (`127.0.0.1:9090`, `localhost:9090`, `[::1]:9090`). Anything else —
+including `0.0.0.0:9090` and `:9090` — is rejected at startup with a message
+naming the fix. Hostnames other than `localhost` are rejected too: DNS
+resolution can change, so a name that resolves to loopback today is not a
+durable guarantee. If you genuinely need to expose it (behind your own
+authenticating reverse proxy, for example), set `allow_non_loopback: true`;
+the agent logs a warning at startup when you do.
 
 ## CLI Commands
 
@@ -398,15 +451,28 @@ Remove-Item "C:\ProgramData\remoteclaw" -Recurse -Force
 # Build
 go build ./cmd/remoteclaw/
 
-# Run all tests with race detector
-go test -race -count=1 ./...
+# Format (CI fails if any file is not gofmt-clean)
+make fmt
+
+# Vet
+go vet ./...
 
 # Lint
 golangci-lint run ./...
 
+# Run all tests with race detector
+go test -race -count=1 ./...
+
 # Run a single test
 go test -run TestIntegration_ChallengeResponse ./internal/agent/
 ```
+
+CI runs exactly these four gates — `gofmt`, `go vet`, `golangci-lint`, and the
+race test — on every push and pull request, and the release workflow calls the
+same job, so a tag cannot ship on a staler gate than a PR. Run them locally
+before pushing. Line endings are normalized to LF by `.gitattributes` (`*.ps1`
+stays CRLF); on Windows, if `gofmt -l` reports files you have not touched,
+re-materialize your working tree with `git rm --cached -r . && git reset --hard`.
 
 ## License
 

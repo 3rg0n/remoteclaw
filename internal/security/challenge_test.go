@@ -133,19 +133,6 @@ func TestChallengeStore_Overwrite(t *testing.T) {
 	assert.Equal(t, "command-2", pc.Command, "should return the most recent pending command")
 }
 
-func TestChallengeStore_ClearPending(t *testing.T) {
-	passphrase := "confirm"
-	encrypted, err := EncryptChallenge(passphrase)
-	require.NoError(t, err)
-
-	cs := NewChallengeStore(encrypted)
-	cs.SetPending("space-1", "shutdown", "system shutdown")
-	cs.ClearPending("space-1")
-
-	_, ok := cs.CheckResponse("space-1", passphrase)
-	assert.False(t, ok, "cleared challenge should not match")
-}
-
 func TestChallengeStore_ReplayResistance(t *testing.T) {
 	passphrase := "my-secret"
 	encrypted, err := EncryptChallenge(passphrase)

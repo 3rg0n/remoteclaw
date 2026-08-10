@@ -7,6 +7,179 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **CI enforces the full quality gate: `gofmt`, `go vet`, `golangci-lint`, and
+  the race test.** Only the race test ran before, and only on a `v*` tag push —
+  so formatting and lint were manual conventions, and the drift this release
+  cleans up (see below) reached `master` unremarked. The gate now lives in one
+  reusable workflow (`.github/workflows/ci.yml`) that runs on push and pull
+  request and is *called* by `release.yml`, so the release path cannot run a
+  staler gate than a PR does. Steps are ordered cheapest-first. The format check
+  tests for empty output rather than an exit code, because `gofmt -l` exits 0
+  even when it names files — the trap that let a bare `gofmt -l` pass as a gate.
+  `golangci-lint` is pinned to v2.12.2 (matching `.golangci.yml`'s `version: "2"`)
+  rather than tracking `latest`, so a new upstream release cannot fail a build
+  with no commit to this repo.
+
+### Security
+- **`webex.allowed_emails` is now enforced in `wmcp` mode.** Through v0.6.0 the
+  allowlist was implemented inside `NativeMode` only, so in `wmcp` mode the
+  config field was silently ignored and any sender the relay forwarded could run
+  commands. Authorization has been lifted into a single choke point,
+  `Agent.authorize`, called at the top of `messageHandler` before the rate
+  limiter, challenge store, or executor — so every connection mode is gated
+  identically and a future `Mode` cannot ship without it. Fails closed (a nil
+  allowlist denies); denials are logged and audited
+  ([ADR 0005](docs/adr/0005-single-authorization-choke-point.md)).
+  **Breaking for `wmcp` operators**: relayed senders are held to strict
+  group-room semantics because a relay cannot prove a 1:1 space, so an empty
+  `allowed_emails` now denies everyone instead of allowing everyone. List the
+  emails you want to authorize. If you ran `wmcp` mode on ≤ v0.6.0, review your
+  audit log.
+- **Fixed a fail-open in the allowlist for spaces whose room type could not be
+  determined.** `IsAllowedInRoom` took the permissive 1:1 branch for any room type
+  that was not exactly `"group"`, and the upstream Webex handler infers the type
+  from Mercury activity tags and returns `""` when they are absent or
+  unrecognized. So a group room whose activity arrived untagged, with an empty
+  `allowed_emails`, authorized every sender in it — the documented "empty list +
+  group room → deny everyone" rule silently did not hold. The permissive branch
+  now requires a positive `"direct"`, and everything else — `"group"`, an
+  unrecognized value, or an empty one — requires an explicit allowlist entry. This
+  predates the authorization rework, but that rework made this function the single
+  gate for every connection mode, so its edge cases now matter everywhere.
+- **`rm -rf /;` was not blocked.** The four `rm` root-deletion rules and the
+  `chmod 777 /` rule required whitespace or end-of-string after the `/`, so any
+  shell metacharacter terminating the argument evaded them: `rm -rf /;` and
+  `rm -rf /; echo done` ran with no challenge prompt. This is **older than this
+  release** — the pattern came over verbatim from the pre-consolidation
+  `DangerousChecker` and had the same hole there, so it was a live gap in every
+  prior version. Rules that pin an exact argument now end it with `argEnd`
+  (whitespace, end of string, or a word-terminating metacharacter). Note that the
+  differential verification cited below could not have caught this: both engines
+  shared the hole, and a differential test only proves the new engine matches the
+  old one ([ADR 0008](docs/adr/0008-command-position-covers-every-shell-entry-point.md)).
+- **The command-position anchor missed brace groups and compound statements**, so
+  `{ exec sh; }`, `if true; then exec sh; fi`, `for i in 1; do exec sh; done`,
+  `while true; do exec sh; done`, and `! exec sh` reached the `exec` builtin
+  unblocked — the rule the anchor was supposed to place, not applied. The separator
+  set gains `{`/`}` and the prefix set gains `if`/`elif`/`then`/`else`/`while`/
+  `until`/`do` and `!`. The brace-group opener counts only when followed by
+  whitespace, and a closing `}` is not a command position at all — folding both
+  into the separator class instead makes `}` match the end of a `${VAR}` expansion
+  and refuses `docker ${FLAGS} exec web sh`, trading the under-match for exactly
+  the false positives the anchor exists to avoid. All 22 false-positive cases from
+  [ADR 0007](docs/adr/0007-deny-rules-anchored-to-command-position.md) still pass —
+  `docker exec` and `echo $(date)` are still allowed — and three new tables pin the
+  enumeration of shell entry points itself
+  ([ADR 0008](docs/adr/0008-command-position-covers-every-shell-entry-point.md)).
+  Introduced by the narrowing earlier in this same release; never shipped.
+- **Fixed a lockdown bypass via challenge-response confirmation.** A secret-read
+  command prefixed with a confirmable token — `sudo -E printenv OPENAI_API_KEY`,
+  `sudo cat <config>`, `eval cat <config>`, `sudo pass show …` — was reported as
+  the *dangerous* match (the dangerous checker ran first and returned early), so
+  it was offered as a challenge; `ForceExecuteCommand` then ran the confirmed
+  command with no lockdown check at all, despite a comment claiming it
+  re-validated. Confirming therefore dumped the secret into the chat transcript.
+  Both halves are closed: hard denials now take precedence over confirmable ones,
+  and a confirmed command is re-checked against the hard rules
+  ([ADR 0006](docs/adr/0006-one-command-policy-with-tagged-rules.md)).
+- Config/secret reads are **hard denials** with no challenge-response path. The
+  challenge reply travels over the same chat channel whose credentials the
+  lockdown protects, so confirming would let a leaked passphrase unlock exactly
+  the secrets at stake. Destructive commands remain confirmable.
+- Command matching is now case-insensitive throughout. The destructive rules were
+  case-sensitive while the secret-read rules lowercased first, so `sudo rm -rf /`
+  was blocked and `SUDO rm -rf /` was not.
+- `health.addr` is validated as loopback-only at config load. The health endpoint
+  is unauthenticated, so `0.0.0.0:9090`, `:9090`, a LAN address, or a hostname
+  other than `localhost` is now rejected at startup with a message naming the
+  fix. Override with `health.allow_non_loopback: true`, which logs a warning.
+
+### Changed
+- **One command deny-list engine.** `security.DangerousChecker` and
+  `executor.Guard.IsSecretReadCommand` are replaced by `security.CommandPolicy`:
+  a single rule table where each rule carries a **category** (`destructive`,
+  `privilege`, `shell-bypass`, `network-exec`, `secret-read`) and a
+  **disposition** (block-with-challenge or block-hard). One evaluation point, one
+  ordering, one denial shape to audit, and one place to add a rule
+  ([ADR 0006](docs/adr/0006-one-command-policy-with-tagged-rules.md)). Verified
+  differentially against both former engines over a 146-command corpus: no
+  command they blocked is now allowed. `Guard.IsProtectedPath` is unchanged and
+  still separate — it is a canonicalizing path check, not string matching.
+- The confirmable/non-confirmable distinction is carried as data
+  (`ToolResult.Denial.Disposition`) instead of being inferred from the block
+  message's prefix. `Executor.SetDangerousChecker` becomes
+  `Executor.SetCommandPolicy`.
+- `connect.Mode` implementations no longer perform authorization; their contract
+  is to report provenance (`Email`, `RoomType`) accurately. `NewNativeMode` no
+  longer takes `allowedEmails`. `WMCPMode` reports `RoomType: "group"` — the
+  strict setting — since the relay envelope carries no room-type field.
+- `ConversationManager` uses a plain `sync.Mutex` instead of an `RWMutex`:
+  `GetHistory` refreshes the entry's TTL, so there is no read-only path and the
+  former `RLock`-then-`Lock` sequence was an unnecessary lock-upgrade hazard.
+- `WMCPMode.conn` is published via `atomic.Pointer` instead of being guarded by a
+  mutex. The connection is replaced wholesale on reconnect while the read and
+  heartbeat loops run; `websocket.Conn`'s methods are safe for concurrent use
+  (except `Read`, which only ever runs on the read loop), so holding a lock
+  across a blocking `Write` only serialized heartbeats behind responses.
+- `getUsername()` resolves from the OS only. The `$USER`/`$USERNAME` fallbacks
+  were caller-controlled and unset or wrong in exactly the contexts RemoteClaw
+  runs in (systemd unit, LaunchAgent, Windows scheduled task).
+- **Line endings are normalized to LF via `.gitattributes`,** and the ten Go
+  files that had genuinely drifted are `gofmt`-clean. No behavior change; the
+  reason it is worth an entry is that the drift was *invisible*: with
+  `core.autocrlf=true` and no `.gitattributes`, a CRLF working tree against LF
+  storage made `gofmt -l` report 32 of 56 files, 22 of them pure line-ending
+  artifacts — so the 10 real ones were indistinguishable from noise and every
+  `gofmt` diff was unreadable. `*.ps1` stays CRLF, which is what PowerShell
+  expects. Contributors on Windows should re-materialize their working tree
+  (`git rm --cached -r . && git reset --hard`) to pick up the new attributes;
+  `git add --renormalize` is a no-op here, since the CRLF was only ever in the
+  working tree and never in storage.
+
+### Fixed
+- **Tool calls now honor context cancellation.** Every executor handler took a
+  `context.Context` and none of them read it, so the signature promised
+  cancellability the bodies did not deliver: neither the processor's 5-minute hard
+  deadline nor a per-command timeout could stop a tool call, and an abandoned
+  request still wrote files and killed processes. `Executor.Execute` (and
+  `ForceExecuteCommand`, which bypasses it) now refuses a cancelled or expired
+  context before dispatch, so no tool has a side effect nobody is waiting for. The
+  two handlers that can block mid-call check as they go: `read_file` reads in 32 KB
+  chunks instead of one uninterruptible `io.ReadAll` over the whole 1 MB cap — the
+  case that mattered, since a slow-backed file (network mount, `/dev/*`, a fifo)
+  outlived the caller's deadline — and the recursive `list_dir` walk checks per
+  entry and reports the abort rather than a directory error. Handlers with no
+  interior blocking point (`write_file`, `kill_process`, `system_info`) name the
+  parameter `_` so the reader can see the omission is deliberate.
+- **`docker exec`, `kubectl exec`, and `echo $(date)` are no longer blocked.** The
+  `exec` and `$(` rules matched anywhere in the command string, so any subcommand
+  named `exec` and any command substitution was refused — the two most common
+  false positives, and the kind that trains an operator to confirm blindly. Both
+  are now anchored to *command position* (start of line, or after `;`/`&&`/`||`/
+  `|`/`(`, skipping `VAR=value` assignments and wrappers like `nohup`), which is
+  the only position where `exec` is the shell builtin and where a substitution's
+  output becomes the command. Coverage the broad patterns held incidentally is now
+  explicit: `find -exec`/`-execdir`, a substitution passed to an interpreter's
+  eval flag (`-c`, `-e`, `-Command`, …), and a substitution or backtick computing
+  an argument to a command whose arguments are the whole risk (`rm -rf $(echo /)`).
+  Pinned by two committed tables in `commandpolicy_test.go`: 22 commands that the
+  broad rules refused and must now be allowed, and 32 execution paths that must
+  still be blocked — including six prefix evasions a plain anchor would have
+  missed (`FOO=1 exec sh`, `nohup exec sh`, `env exec sh`)
+  ([ADR 0007](docs/adr/0007-deny-rules-anchored-to-command-position.md)).
+- Secret-read matching no longer compiles regexps on every call. `Guard.IsSecretReadCommand`
+  rebuilt its env-dump pattern per invocation; the rules are now pre-compiled once
+  when the command policy is constructed.
+
+### Removed
+- Dead exported API with no production callers: `Allowlist.Reload` (which made
+  the allowlist immutable after construction, so its mutex is gone and reads are
+  lock-free), `ConversationManager.Clear`/`ClearAll`, and
+  `ChallengeStore.ClearPending`.
+- Stale Bedrock references in `internal/ai/processor.go` comments and the README
+  prerequisites, left over from the v0.5.0 move to inferd + openai-compat.
+
 ## [0.6.0] - 2026-07-17
 
 ### Added

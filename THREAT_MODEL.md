@@ -15,7 +15,7 @@ Analysis across all 7 MAESTRO layers identified **19 verified findings**: 1 Crit
 
 > **Security posture (ADR 0004).** RemoteClaw runs with the **installing user's
 > privileges** — this is inherent to "remote hands for your machine" and is not a
-> defect. The controls below (allowlist, rate limit, dangerous-command checker,
+> defect. The controls below (allowlist, rate limit, command policy,
 > challenge-response, in-process lockdown guard, audit) are **best-effort
 > defense-in-depth** that raise cost and narrow surface for a *remote* attacker
 > abusing the chat interface. They are **explicitly not** claimed to stop an
@@ -66,11 +66,11 @@ Findings prefixed **N-** are new or materially changed by the refactor; **C-** a
 | C-1 | T2, T11 | L3,L4 | Unrestricted Shell Execution (execute_command) | Critical | 3 | 3 | 9 | Autonomy | CWE-78, OWASP A03, STRIDE:E |
 | N-1 | T9, T22, BV-11 | L1,L4,L6 | openai_base_url (outbound client) — No TLS/Scheme Enforcement (key + conversation in cleartext, MITM) | High | 2 | 3 | 6 | Agent Identity | CWE-319, OWASP A02, STRIDE:S |
 | N-2 | T47, T13, T12 | L7 | Rogue/Compromised openai-compat Endpoint Drives Tool Calls (outbound trust) | High | 2 | 3 | 6 | Non-Det, Autonomy | CWE-345, LLM01, STRIDE:T |
-| C-2 | T11 | L3,L6 | Dangerous Command Checker Bypass (Regex Evasion) | High | 3 | 2 | 6 | Non-Det | CWE-78, CWE-184, OWASP A03 |
+| C-2 | T11 | L3,L6 | Command Policy Bypass (Regex Evasion) | High | 3 | 2 | 6 | Non-Det | CWE-78, CWE-184, OWASP A03 |
 | C-3 | T3 | L4,L6 | Runs as Root/SYSTEM Service — Implicit Privilege Escalation | High | 2 | 3 | 6 | Autonomy | CWE-250, CWE-269, STRIDE:E |
 | C-4 | T23 | L5 | No Tamper Protection on Audit Logs | High | 2 | 3 | 6 | — | CWE-778, STRIDE:T |
 | C-5 | T9 | L1,L7 | WMCP `ws://` Only Warns, Does Not Block (token cleartext) | High | 2 | 2 | 4 | Agent Identity | CWE-319, STRIDE:S |
-| C-6 | T2, T3 | L3 | write_file / kill_process Skip the Dangerous Checker | High | 2 | 2 | 4 | Autonomy | CWE-862, STRIDE:E |
+| C-6 | T2, T3 | L3 | write_file / kill_process Skip the Command Policy | High | 2 | 2 | 4 | Autonomy | CWE-862, STRIDE:E |
 | N-3 | T22 | L2,L5 | Tool Inputs Not Scrubbed in Audit Log | Medium | 2 | 2 | 4 | — | CWE-532, OWASP A09, STRIDE:I |
 | N-4 | T7 | L3 | Passthrough Removes LLM Soft-Filter (deterministic gates only) | Medium | 2 | 2 | 4 | Autonomy, Non-Det | ASI-only, LLM01 |
 | N-5 | T3 | L4 | inferd_socket Path Override Unvalidated (local MITM of inference) | Medium | 1 | 2 | 2 | Agent Identity | CWE-426, CWE-59 |
@@ -90,7 +90,7 @@ Findings prefixed **N-** are new or materially changed by the refactor; **C-** a
 | R-1 | T1 — No integrity check on Ollama model auto-pull (was HIGH) | **Removed.** inferd owns the model lifecycle; RemoteClaw performs no model pull. |
 | R-2 | T22 — AWS credentials required in RemoteClaw's environment | **Removed.** Bedrock reached (if at all) via an openai-compat gateway; no AWS SDK, no AWS creds. |
 | R-3 | Dependency CVE (GO-2026-4945, go-jose) | **Patched** to go-jose/go-jose/v4 v4.1.4 in the same PR. |
-| R-4 | T22 — `read_file(".env")` exfil of tokens by a prompt-injected agent | **Reduced (best-effort).** Secrets move to `pass` (encrypted, no readable file), and the lockdown guard denies the agent's *file tools* on config/`.env`/store (ADR 0003). Residual, per ADR 0004: a shell-capable agent running as the user can still `pass show` / `gpg -d` / read via a crafted command — no in-process control fully prevents this. The guard raises the bar; it is not a hard boundary. |
+| R-4 | T22 — `read_file(".env")` exfil of tokens by a prompt-injected agent | **Reduced (best-effort).** Secrets move to `pass` (encrypted, no readable file), and the lockdown guard denies the agent's *file tools* on config/`.env`/store (ADR 0003). Residual, per ADR 0004: a shell-capable agent running as the user can still `pass show` / `gpg -d` / read via a crafted command — no in-process control fully prevents this. The guard raises the bar; it is not a hard boundary. **Correction (2026-08-09):** the shell half of this control was *weaker than documented here*, not merely best-effort. A secret read prefixed with a confirmable token (`sudo -E printenv OPENAI_API_KEY`, `sudo cat <config>`, `eval cat <config>`, `sudo pass show …`) matched a destructive rule first, was offered as a challenge, and `ForceExecuteCommand` then ran it with **no** lockdown check — so confirming exfiltrated the secret into the chat transcript. Verified against the pre-change code. Closed by [ADR 0006](docs/adr/0006-one-command-policy-with-tagged-rules.md): secret reads are hard denials evaluated before confirmable ones, and a confirmed command is re-checked against the hard rules. The residual risk stated above (a crafted command the rules do not match) still stands. |
 | R-5 | T3 — RemoteClaw runs as root/SYSTEM (was HIGH, C-3) | **Partially reduced; reframed by ADR 0004.** The installer can run under a dedicated low-privilege account (`install --user`), reducing blast radius vs. root. But RemoteClaw fundamentally runs with the **installing user's** privileges by design — it is not, and cannot make itself, isolated from the user it acts for. "Config unreadable by the agent even as admin" is **not** achievable in-process (you cannot setuid to a different unprivileged user); it needs an external sandbox. Treated as accepted residual risk, not a solved finding. |
 
 ## Layer Analysis
@@ -115,11 +115,11 @@ The model source is now one of two operator choices, which reshapes L1 risk.
 
 ### Layer 3: Agent Frameworks
 
-**C-1 — Unrestricted shell execution (CRITICAL).** `execute_command` runs arbitrary shell (`internal/executor/command.go`); this is the product's core function and its core risk. Gated by the dangerous-command checker and challenge-response, but those are policy layers, not a sandbox.
+**C-1 — Unrestricted shell execution (CRITICAL).** `execute_command` runs arbitrary shell (`internal/executor/command.go`); this is the product's core function and its core risk. Gated by the command policy (`internal/security/commandpolicy.go`) and challenge-response, but those are policy layers, not a sandbox.
 
-**N-4 — Passthrough removes the LLM soft-filter (MEDIUM).** In `ai.mode: passthrough`, `messageHandler` routes the raw message to `handlePassthrough`, which executes it directly. **The guardrail wiring was verified intact**: passthrough calls the *same* `executeToolGuarded` helper as the AI loop (`agent.go`), so the dangerous checker, challenge-response (spaceID correctly threaded via `spaceIDKey`), rate limit, allowlist, and audit all apply identically — the Integrity audit and orchestrator review both confirm this is **not** a guardrail bypass. The residual risk is the loss of the model's *interpretive* soft-filter (which in interpret mode can decline semantically dangerous but pattern-clean requests). This is a documented, accepted trade (ADR 0002); the deterministic gates are the real controls. *Mitigation*: require allowlist + challenge-response whenever passthrough is enabled.
+**N-4 — Passthrough removes the LLM soft-filter (MEDIUM).** In `ai.mode: passthrough`, `messageHandler` routes the raw message to `handlePassthrough`, which executes it directly. **The guardrail wiring was verified intact**: passthrough calls the *same* `executeToolGuarded` helper as the AI loop (`agent.go`), so the command policy, challenge-response (spaceID correctly threaded via `spaceIDKey`), rate limit, allowlist, and audit all apply identically — the Integrity audit and orchestrator review both confirm this is **not** a guardrail bypass. The residual risk is the loss of the model's *interpretive* soft-filter (which in interpret mode can decline semantically dangerous but pattern-clean requests). This is a documented, accepted trade (ADR 0002); the deterministic gates are the real controls. *Mitigation*: require allowlist + challenge-response whenever passthrough is enabled.
 
-**C-6 — write_file / kill_process skip the dangerous checker (HIGH).** `executor.go:48` applies the dangerous-command checker **only** to `execute_command`. `write_file`, `kill_process`, and others dispatch unchecked (`write_file` has a sensitive-path check, but there is no unified capability gate). A model (or rogue endpoint, N-2) can chain `list_dir` → `write_file` (drop a script) → `execute_command` (a checker-clean invocation) to act. *Mitigation*: extend policy checks across all state-changing tools.
+**C-6 — write_file / kill_process skip the command policy (HIGH, still open).** `Executor.Execute` (`internal/executor/executor.go:62-72`) applies the command policy **only** to `execute_command`. `write_file`, `kill_process`, and others dispatch unchecked (`write_file` has a sensitive-path check and the lockdown guard covers the file tools on protected paths, but there is no unified capability gate). A model (or rogue endpoint, N-2) can chain `list_dir` → `write_file` (drop a script) → `execute_command` (a policy-clean invocation) to act. Consolidating the two former engines into one policy (ADR 0006) did not change this finding — it narrowed *where* the gate lives, not *which tools* pass through it. *Mitigation*: extend policy checks across all state-changing tools.
 
 **C-10 — No per-iteration timeout/backoff (MEDIUM).** `processor.go` enforces a 5-minute whole-loop deadline and a 3-consecutive-error circuit breaker, but no per-iteration timeout or backoff; a backend that hangs near the per-tool timeout can consume the full window.
 
@@ -149,7 +149,13 @@ The model source is now one of two operator choices, which reshapes L1 risk.
 
 **Challenge-response — verified sound.** `challenge.go` uses AES-256-GCM over a scrypt-derived key, keyed by `spaceID`, with `challengeTTL = 2 * time.Minute` and `maxChallengeAttempts = 3` brute-force lockout. (The ungrounded "5-minute TTL / no lockout" claims were false and dropped.)
 
-**Allowlist — enforced before handling.** The email allowlist is applied in the connect layer (`native.go` `IsAllowedInRoom`) before `messageHandler` runs, strict in group rooms (empty list = deny all). Passthrough does not relax this.
+**C-2 — command policy is a deny-list, so evasion is inherent (HIGH, accepted).** A shell-capable request can reach the same effect by a spelling no rule matches (base64, `$IFS` splitting, a copied binary, a computed argument). This is the accepted residual of ADR 0004: the deny-list raises cost, the challenge proves intent, and neither is a sandbox. Two rules were **narrowed** in this cycle — `exec` and `$(` are now anchored to command position rather than matched anywhere in the string — which trades a class of false positive for a slightly smaller literal match surface. That trade is deliberate: a rule that refused `docker exec -it web sh` and `echo $(date)` trained the operator to confirm without reading, which costs more security than the over-match bought. The coverage the broad patterns held incidentally (`find -exec`, substitution into an interpreter's eval flag, substitution computing an argument to a destructive command) was made explicit rather than dropped, and the anchor deliberately skips the prefixes a shell skips (`FOO=1 exec sh`, `nohup exec sh`) so it is not evaded by prepending a token. Pinned by two committed tables in `commandpolicy_test.go` — 22 commands that must now be allowed and 32 execution paths that must still be blocked — and recorded in ADR 0007, since the anchored rule reads like a gap to anyone who has not seen the false-positive argument.
+
+**Allowlist — one choke point, all modes.** `webex.allowed_emails` is enforced in `Agent.authorize`, called at the top of `messageHandler` before the rate limiter, the challenge store, or the executor can be reached. Permissive **only** for a space positively identified as 1:1 (`RoomType == "direct"`) when the list is empty; strict everywhere else. Passthrough does not relax this. WMCP reports `RoomType: "group"` because a relay cannot prove a 1:1 space, so an unset `allowed_emails` denies every relay sender.
+
+> **Fail-open found and fixed in this cycle (was reachable, not theoretical).** The permissive branch was selected by `roomType != "group"`, and the upstream Webex handler's `inferRoomType` returns `""` when the Mercury activity tags it reads are absent or unrecognized. A group room delivering untagged activity therefore took the 1:1 branch, and with an empty `allowed_emails` that authorized every sender in the room — while the documented rule said group rooms deny all. The test suite asserted the buggy behavior (`"empty roomType treated as direct" → true`), so it was pinned rather than caught. The branch now requires a positive `"direct"` and denies what it cannot classify; `TestAllowlist_IsAllowedInRoom_UnknownRoomTypeFailsClosed` covers `""`, `"team"`, `"GROUP"`, and `"unknown"` against both empty and populated lists. Predates the choke-point rework, but that rework made this function the sole gate for every mode, which is what raised the severity.
+
+> **Correction (supersedes the pre-v0.7.0 claim).** This section previously stated the allowlist was applied "in the connect layer (`native.go` `IsAllowedInRoom`)". That was true only of native mode. `NewWMCPMode` was constructed without an allowlist, so in `wmcp` mode `allowed_emails` was silently ignored and any sender the relay forwarded reached the executor. Authorization has since been lifted out of the Mode implementations into the single choke point described above; Modes now carry no authz logic at all, only provenance (`Email`, `RoomType`). See ADR 0005.
 
 **VCS hygiene (.gitignore audit).** Derived from `git ls-files` ∩ root `.gitignore` (authoritative recon):
 
@@ -167,7 +173,7 @@ The model source is now one of two operator choices, which reshapes L1 risk.
 
 ### Layer 7: Agent Ecosystem
 
-**N-2 — Rogue/compromised openai-compat endpoint (HIGH).** With openai-compat, RemoteClaw treats an operator-configured remote host as the reasoning brain. A malicious or hijacked endpoint (or MITM enabled by N-1) can return crafted `tool_use` calls that drive local execution. **Bounded** by three downstream controls: `executor.dispatch` rejects unknown tool names, the dangerous-command checker gates `execute_command`, and challenge-response gates blocked commands. Residual risk: any checker-clean command the endpoint induces will run. *Mitigation*: restrict `openai_base_url` to organization-controlled endpoints; prefer local inferd for sensitive hosts; enforce TLS (N-1).
+**N-2 — Rogue/compromised openai-compat endpoint (HIGH).** With openai-compat, RemoteClaw treats an operator-configured remote host as the reasoning brain. A malicious or hijacked endpoint (or MITM enabled by N-1) can return crafted `tool_use` calls that drive local execution. **Bounded** by three downstream controls: `executor.dispatch` rejects unknown tool names, the command policy gates `execute_command`, and challenge-response gates confirmable denials. Residual risk: any policy-clean command the endpoint induces will run. *Mitigation*: restrict `openai_base_url` to organization-controlled endpoints; prefer local inferd for sensitive hosts; enforce TLS (N-1).
 
 **Supply-chain governance (MEDIUM, informational).** `go.mod` pins `github.com/3rg0n/inferd/clients/go` to a **pseudo-version commit** (`v0.0.0-…-59d33b172d49`), not a signed release tag, because upstream publishes no `clients/go/` submodule tags (tracked as inferd issue #48). No SBOM or license-audit step in CI. *Mitigation*: pin to a signed release tag once available; add SBOM generation.
 
@@ -197,7 +203,7 @@ RemoteClaw's "agent definition" is its system prompt (`internal/ai/prompt.go`) p
 2. **Constrain the remote-endpoint trust boundary (N-2).** Document that openai-compat trusts the endpoint as the reasoning brain; recommend org-controlled endpoints and local inferd for sensitive hosts. Keep the `dispatch` allowlist as the backstop.
 3. **Run as a dedicated low-privilege user (C-3).** Ship install guidance/defaults for a non-root service account; consider seccomp/AppArmor (Linux) or a restricted service account (Windows).
 4. **Scrub secrets from `ToolInputs` in the audit log (N-3).** Apply `scrubSecrets` to each element before writing.
-5. **Extend the dangerous-command/policy gate beyond `execute_command` (C-6).** Apply capability checks to `write_file` and `kill_process`.
+5. **Extend the command-policy gate beyond `execute_command` (C-6).** Apply capability checks to `write_file` and `kill_process`.
 6. **Reject `ws://` for WMCP (C-5)** and add tamper-evidence to audit logs (C-4).
 7. **Validate `inferd_socket` (N-5)**, restrict the health bind address to loopback (C-7), and sign release artifacts (C-8).
 8. **Hardening backlog**: `.gitignore` key/cert patterns, provider attribution + explicit `Blocked` flag in audit (N-6, C-13), env-var expansion allowlist (C-9), per-iteration loop timeout (C-10).
@@ -206,16 +212,18 @@ RemoteClaw's "agent definition" is its system prompt (`internal/ai/prompt.go`) p
 
 1. **Webex user → RemoteClaw** — authenticated by bot token; authorized by email allowlist (strict in group rooms). Untrusted input crosses here.
 2. **RemoteClaw → inference backend** — *new/changed*. For inferd: a local IPC socket (trusted daemon, but the socket path is an integrity boundary — N-5). For openai-compat: an outbound HTTP call to an operator-configured, cryptographically-unverified remote host — the **most significant new trust boundary** (N-1, N-2).
-3. **Inference backend → executor** — model/endpoint output crosses into command execution; gated by the dispatch allowlist + dangerous checker + challenge-response. Passthrough removes the model from this edge but keeps the deterministic gates.
+3. **Inference backend → executor** — model/endpoint output crosses into command execution; gated by the dispatch allowlist + command policy + challenge-response (confirmable denials only; secret reads are refused outright, ADR 0006). Passthrough removes the model from this edge but keeps the deterministic gates.
 4. **RemoteClaw → operating system** — runs as a system service (often root/SYSTEM), executing shell commands (C-1, C-3).
-5. **RemoteClaw ↔ WMCP relay** (optional) — token-authenticated; cleartext if `ws://` (C-5).
+5. **RemoteClaw ↔ WMCP relay** (optional) — token-authenticated; cleartext if `ws://` (C-5). The relay is trusted to forward the sender's email but not to authorize it: senders it forwards cross boundary 1 and are subject to the same allowlist, under strict group-room semantics.
 
 ## Data Flow Diagram (Text)
 
 ```
                           TRUST BOUNDARY 1
-   Webex user  ── message ──▶ [allowlist + rate limit] ──▶ messageHandler
-   (untrusted)                                                   │
+   Webex user  ── message ──▶ [Mode: native | wmcp] ──▶ messageHandler
+   (untrusted)                 (no authz — provenance   [authorize → rate limit
+                                only: Email, RoomType)   → challenge check]
+                                                                  │
                                                  ┌───────────────┴───────────────┐
                                         interpret│                                │passthrough
                                                  ▼                                ▼
@@ -231,7 +239,7 @@ RemoteClaw's "agent definition" is its system prompt (`internal/ai/prompt.go`) p
                     └────────────┬────────────────────────────┘                    │
                                  ▼  tool_use calls                                  │
                           TRUST BOUNDARY 3                                          │
-                    [dispatch allowlist + dangerous checker + challenge-response]◀──┘
+                    [dispatch allowlist + command policy + challenge-response]◀──┘
                                  │  (same executeToolGuarded for both paths)
                                  ▼
                           TRUST BOUNDARY 4

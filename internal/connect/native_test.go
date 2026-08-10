@@ -13,20 +13,18 @@ import (
 func TestNewNativeMode(t *testing.T) {
 	logger := zerolog.New(nil)
 	botToken := "test-token"
-	allowedEmails := []string{"user@example.com"}
 
-	nm := NewNativeMode(botToken, allowedEmails, logger)
+	nm := NewNativeMode(botToken, logger)
 
 	require.NotNil(t, nm)
 	assert.Equal(t, botToken, nm.botToken)
-	assert.NotNil(t, nm.allowlist)
 	assert.NotNil(t, nm.sender)
 }
 
 // TestNativeModeOnMessage tests the OnMessage method
 func TestNativeModeOnMessage(t *testing.T) {
 	logger := zerolog.New(nil)
-	nm := NewNativeMode("test-token", []string{}, logger)
+	nm := NewNativeMode("test-token", logger)
 
 	handlerCalled := false
 	handler := func(ctx context.Context, msg IncomingMessage) {
@@ -44,40 +42,16 @@ func TestNativeModeOnMessage(t *testing.T) {
 // TestNativeModeCloseWithoutConnect tests Close without prior Connect
 func TestNativeModeCloseWithoutConnect(t *testing.T) {
 	logger := zerolog.New(nil)
-	nm := NewNativeMode("test-token", []string{}, logger)
+	nm := NewNativeMode("test-token", logger)
 
 	err := nm.Close()
 	assert.NoError(t, err)
 }
 
-// TestNativeModeAllowlistIntegration tests that allowlist is properly wired
-func TestNativeModeAllowlistIntegration(t *testing.T) {
-	logger := zerolog.New(nil)
-	allowedEmails := []string{"alice@example.com", "bob@example.com"}
-	nm := NewNativeMode("test-token", allowedEmails, logger)
-
-	// Allowed emails (case-insensitive via Allowlist)
-	assert.True(t, nm.allowlist.IsAllowed("alice@example.com"))
-	assert.True(t, nm.allowlist.IsAllowed("bob@example.com"))
-	assert.True(t, nm.allowlist.IsAllowed("Alice@Example.COM"))
-
-	// Disallowed email
-	assert.False(t, nm.allowlist.IsAllowed("charlie@example.com"))
-}
-
-// TestNativeModeEmptyAllowlist tests that empty allowlist allows all
-func TestNativeModeEmptyAllowlist(t *testing.T) {
-	logger := zerolog.New(nil)
-	nm := NewNativeMode("test-token", []string{}, logger)
-
-	assert.True(t, nm.allowlist.IsAllowed("anyone@example.com"))
-	assert.True(t, nm.allowlist.IsAllowed("someone@example.com"))
-}
-
 // TestNativeModeImplementsMode tests that NativeMode implements Mode interface
 func TestNativeModeImplementsMode(t *testing.T) {
 	logger := zerolog.New(nil)
-	nm := NewNativeMode("test-token", []string{}, logger)
+	nm := NewNativeMode("test-token", logger)
 
 	// Compile-time check
 	var _ Mode = nm
