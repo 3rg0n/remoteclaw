@@ -87,7 +87,11 @@ func TestWMCPIntegration_FullCycle(t *testing.T) {
 	logger := zerolog.New(nil)
 	wm := NewWMCPMode(wsURL, "integration-token", logger)
 
+	var gotRoomType string
 	wm.OnMessage(func(ctx context.Context, msg IncomingMessage) {
+		mu.Lock()
+		gotRoomType = msg.RoomType
+		mu.Unlock()
 		_ = wm.SendMessage(ctx, msg.SpaceID, "reply to: "+msg.Text)
 	})
 
@@ -112,6 +116,12 @@ func TestWMCPIntegration_FullCycle(t *testing.T) {
 	assert.Equal(t, "integ-req-1", receivedResponse.RequestID)
 	assert.Equal(t, "integ-space", receivedResponse.SpaceID)
 	assert.Equal(t, "reply to: integration test", receivedResponse.Text)
+
+	// Security invariant: relayed messages must be reported as "group" so the
+	// agent's authz choke point applies strict allowlist semantics (an empty
+	// allowed_emails denies every relay sender rather than admitting all).
+	assert.Equal(t, "group", gotRoomType,
+		"WMCP must report RoomType \"group\"; the relay cannot prove a 1:1 space")
 
 	_ = wm.Close()
 
@@ -177,6 +187,99 @@ func TestWMCPIntegration_ReconnectOnDisconnect(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("Timed out waiting for reconnect")
 	}
+
+	_ = wm.Close()
+}
+
+// TestWMCPIntegration_ConcurrentSendDuringReconnect drives SendMessage from
+// several goroutines while the server forces repeated reconnects, so the send
+// path's read of the conn field is concurrent with reconnect's replacement of
+// it. TestWMCPIntegration_ReconnectOnDisconnect covers reconnect but never sends
+// concurrently, so it leaves this path untested.
+//
+// This guards the atomic publication of conn: a send must never observe a torn
+// or stale pointer, and must fail cleanly rather than panic while disconnected.
+func TestWMCPIntegration_ConcurrentSendDuringReconnect(t *testing.T) {
+	var connectionMu sync.Mutex
+	connectionCount := 0
+	settled := make(chan struct{})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+
+		// Read auth, ack it.
+		if _, _, err := conn.Read(r.Context()); err != nil {
+			return
+		}
+		resp, _ := json.Marshal(WMCPEnvelope{Type: "auth_ok"})
+		if err := conn.Write(r.Context(), websocket.MessageText, resp); err != nil {
+			return
+		}
+
+		connectionMu.Lock()
+		connectionCount++
+		count := connectionCount
+		connectionMu.Unlock()
+
+		// Drop the first few connections to force repeated reconnects, then
+		// hold the last one open and drain whatever the client sends.
+		if count < 3 {
+			time.Sleep(50 * time.Millisecond)
+			_ = conn.Close(websocket.StatusGoingAway, "forced drop")
+			return
+		}
+
+		close(settled)
+		for {
+			if _, _, err := conn.Read(r.Context()); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	wm := NewWMCPMode(wsURL, "token", zerolog.New(nil))
+	wm.OnMessage(func(ctx context.Context, msg IncomingMessage) {})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	require.NoError(t, wm.Connect(ctx))
+
+	// Hammer the send path while reconnects churn the conn field underneath it.
+	sendCtx, stopSending := context.WithCancel(ctx)
+	var senders sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		senders.Add(1)
+		go func() {
+			defer senders.Done()
+			for sendCtx.Err() == nil {
+				// Errors are expected while disconnected; the point is that the
+				// conn field access itself is safe.
+				_ = wm.SendMessage(sendCtx, "space", "ping")
+				time.Sleep(time.Millisecond)
+			}
+		}()
+	}
+
+	select {
+	case <-settled:
+	case <-time.After(25 * time.Second):
+		stopSending()
+		senders.Wait()
+		t.Fatal("Timed out waiting for reconnects to settle")
+	}
+
+	stopSending()
+	senders.Wait()
+
+	connectionMu.Lock()
+	assert.GreaterOrEqual(t, connectionCount, 3, "should have reconnected at least twice")
+	connectionMu.Unlock()
 
 	_ = wm.Close()
 }

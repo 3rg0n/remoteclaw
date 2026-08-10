@@ -17,7 +17,7 @@ type ConversationManager struct {
 	histories  map[string][]ai.Message
 	lastAccess map[string]time.Time // tracks last access for TTL cleanup
 	maxLen     int
-	mu         sync.RWMutex
+	mu         sync.Mutex
 }
 
 // NewConversationManager creates a new conversation manager with a maximum history length.
@@ -32,19 +32,18 @@ func NewConversationManager(maxHistory int) *ConversationManager {
 
 // GetHistory returns a copy of the conversation history for the given key.
 // Returns an empty slice if the key is not found.
+//
+// Takes the write lock: reading a history also refreshes its TTL, so this is
+// never a read-only operation.
 func (cm *ConversationManager) GetHistory(key string) []ai.Message {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
 
 	history, ok := cm.histories[key]
 	if !ok {
 		return []ai.Message{}
 	}
-	cm.mu.RUnlock()
-	cm.mu.Lock()
 	cm.lastAccess[key] = time.Now()
-	cm.mu.Unlock()
-	cm.mu.RLock()
 
 	// Return a deep copy to prevent external modifications
 	historyCopy := make([]ai.Message, len(history))
@@ -85,24 +84,6 @@ func (cm *ConversationManager) UpdateHistory(key string, history []ai.Message) {
 
 	// Clean up stale conversations while we hold the lock
 	cm.cleanupStaleLocked()
-}
-
-// Clear removes the conversation history for a specific key.
-func (cm *ConversationManager) Clear(key string) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	delete(cm.histories, key)
-	delete(cm.lastAccess, key)
-}
-
-// ClearAll removes all conversation histories.
-func (cm *ConversationManager) ClearAll() {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
-	cm.histories = make(map[string][]ai.Message)
-	cm.lastAccess = make(map[string]time.Time)
 }
 
 // cleanupStaleLocked removes conversations that haven't been accessed within conversationTTL.

@@ -1,13 +1,16 @@
 package executor
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
 
+	"github.com/3rg0n/remoteclaw/internal/security"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -462,6 +465,284 @@ func TestReadFileMaxBytes(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, 0, result.ExitCode)
 	assert.Contains(t, result.Output, "01234")
+}
+
+// TestExecutePolicyDenialShape verifies a command denial carries the verdict on
+// the result, not just a formatted string. The challenge-response handoff keys
+// off the disposition, so parsing Error would make the security decision depend
+// on message wording.
+func TestExecutePolicyDenialShape(t *testing.T) {
+	exec := New(5*time.Second, 30*time.Second, "")
+	exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{
+		BlockDangerous: true,
+	}))
+
+	result, err := exec.Execute(context.Background(), "execute_command",
+		map[string]any{"command": "rm -rf /"})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.ExitCode)
+	assert.Contains(t, result.Error, "Command blocked:")
+	require.NotNil(t, result.Denial)
+	assert.Equal(t, security.CategoryDestructive, result.Denial.Category)
+	assert.Equal(t, security.DispositionChallenge, result.Denial.Disposition)
+	// A confirmable denial must not claim local administration is required.
+	assert.NotContains(t, result.Error, "requires local administration")
+}
+
+// TestExecuteWithoutPolicyBlocksNothing covers the operator opt-out: no policy
+// installed means no command denial, and a nil policy must not panic.
+func TestExecuteWithoutPolicyBlocksNothing(t *testing.T) {
+	exec := New(5*time.Second, 30*time.Second, "")
+
+	result, err := exec.Execute(context.Background(), "execute_command",
+		map[string]any{"command": "echo shutdown"})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Nil(t, result.Denial)
+	assert.Equal(t, 0, result.ExitCode)
+}
+
+// TestForceExecuteCommandRunsConfirmedDestructive verifies challenge-response
+// confirmation actually bypasses the confirmable rules — otherwise confirming
+// would be a no-op.
+func TestForceExecuteCommandRunsConfirmedDestructive(t *testing.T) {
+	exec := New(5*time.Second, 30*time.Second, "")
+	exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{
+		BlockDangerous: true,
+	}))
+
+	// Matches the "at job scheduling" rule but is harmless to actually run.
+	const cmd = "echo at now"
+	require.NotNil(t, exec.policy.Check(cmd), "test command must be policy-blocked to be meaningful")
+
+	result, err := exec.ForceExecuteCommand(context.Background(), cmd)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Nil(t, result.Denial, "a confirmed destructive command must not be re-denied")
+	assert.Equal(t, 0, result.ExitCode)
+}
+
+// TestForceExecuteCommandStillDeniesSecretReads is the security invariant of the
+// merged policy: confirmation proves intent for a destructive command, but the
+// challenge response arrives over the same chat channel whose credentials the
+// lockdown protects, so it must not unlock config/secret access.
+func TestForceExecuteCommandStillDeniesSecretReads(t *testing.T) {
+	dir := t.TempDir()
+	protected := filepath.Join(dir, "config.yaml")
+	g := NewGuard(true, []string{dir})
+	exec := New(5*time.Second, 30*time.Second, "")
+	exec.SetGuard(g)
+	exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{
+		BlockDangerous:   true,
+		BlockSecretReads: true,
+		ProtectedPaths:   g.ProtectedPaths(),
+	}))
+
+	cases := []string{
+		"cat " + protected,
+		"pass show remoteclaw/webex_bot_token",
+
+		// The bypass chain this consolidation closes. Each of these matches a
+		// *confirmable* rule (sudo / eval) as well as a secret-read rule. Before
+		// consolidation the dangerous checker ran first and returned early, so
+		// the command was offered as a challenge; on confirmation the old
+		// ForceExecuteCommand ran it with no lockdown check at all, dumping the
+		// secret. Precedence (hard denials first) plus the hard re-check here
+		// closes both halves.
+		"sudo -E printenv OPENAI_API_KEY",
+		"sudo cat " + protected,
+		"eval cat " + protected,
+	}
+	for _, cmd := range cases {
+		result, err := exec.ForceExecuteCommand(context.Background(), cmd)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.NotNil(t, result.Denial, "confirmation must not unlock %q", cmd)
+		assert.Equal(t, security.CategorySecretRead, result.Denial.Category,
+			"%q must be denied as a secret read, not as the confirmable rule it also matches", cmd)
+		assert.Equal(t, 1, result.ExitCode)
+	}
+}
+
+// TestExecuteRejectsCancelledContext covers the entry check in Execute: the
+// handler signatures promised cancellability the bodies never delivered, so an
+// abandoned request — one whose caller already hit the processor's 5-minute cap —
+// still wrote files and killed processes. Every tool must refuse instead.
+func TestExecuteRejectsCancelledContext(t *testing.T) {
+	exec := New(5*time.Second, 30*time.Second, "")
+
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "must-not-exist.txt")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	calls := []struct {
+		tool   string
+		params map[string]any
+	}{
+		{"execute_command", map[string]any{"command": "echo hi"}},
+		{"read_file", map[string]any{"path": filepath.Join(dir, "any.txt")}},
+		{"write_file", map[string]any{"path": victim, "content": "x"}},
+		{"list_dir", map[string]any{"path": dir}},
+		{"list_dir", map[string]any{"path": dir, "recursive": true}},
+		{"list_processes", map[string]any{}},
+		{"kill_process", map[string]any{"pid": 999999}},
+		{"system_info", map[string]any{}},
+	}
+	for _, c := range calls {
+		t.Run(c.tool, func(t *testing.T) {
+			result, err := exec.Execute(ctx, c.tool, c.params)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, 1, result.ExitCode)
+			assert.Contains(t, result.Error, "tool call aborted")
+			assert.Contains(t, result.Error, context.Canceled.Error())
+		})
+	}
+
+	// The point of refusing: no side effect happened.
+	_, statErr := os.Stat(victim)
+	assert.True(t, os.IsNotExist(statErr),
+		"write_file must not touch the filesystem on a cancelled context")
+}
+
+// TestForceExecuteCommandRejectsCancelledContext covers the confirmation path,
+// which bypasses Execute and so needs its own check. Confirmation arrives as a
+// separate chat message, so measurable time has passed since the command was
+// proposed — this is the path most likely to find an expired context.
+func TestForceExecuteCommandRejectsCancelledContext(t *testing.T) {
+	exec := New(5*time.Second, 30*time.Second, "")
+	exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{
+		BlockDangerous: true,
+	}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, err := exec.ForceExecuteCommand(ctx, "echo at now")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.ExitCode)
+	assert.Contains(t, result.Error, "tool call aborted")
+
+	// An empty command is still rejected as an empty command, and a hard denial
+	// still outranks the abort — cancellation must not become a way to get a
+	// different answer out of the policy.
+	result, err = exec.ForceExecuteCommand(ctx, "")
+	require.NoError(t, err)
+	assert.Contains(t, result.Error, "empty command")
+}
+
+// TestReadFileCancelledMidRead is the concrete hazard #34 names: readFile used a
+// single io.ReadAll over the whole size cap, which cannot be interrupted. On a
+// slow-backed file (network mount, /dev/*, a fifo) that call outlives the
+// caller's deadline. The read is now chunked, so a context cancelled after the
+// read begins is observed between chunks.
+func TestReadFileCancelledMidRead(t *testing.T) {
+	// A reader that hands back one chunk, then cancels before the next. The
+	// handler must notice at the chunk boundary rather than reading to the cap.
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &cancelAfterFirstRead{cancel: cancel}
+
+	data, err := readAllCancellable(ctx, r, DefaultMaxReadBytes)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, data)
+	assert.Equal(t, 1, r.reads, "the second chunk must not be attempted after cancellation")
+}
+
+// cancelAfterFirstRead fills one chunk, then cancels the context, standing in
+// for a slow-backed file whose caller gives up partway through.
+type cancelAfterFirstRead struct {
+	cancel context.CancelFunc
+	reads  int
+}
+
+func (c *cancelAfterFirstRead) Read(p []byte) (int, error) {
+	c.reads++
+	c.cancel()
+	return len(p), nil
+}
+
+// TestReadAllCancellableMatchesReadAll pins the refactor: chunking changed how
+// readFile reads, and must not have changed what it returns. Sizes straddle the
+// chunk boundary in both directions, and the limit is exercised exactly.
+func TestReadAllCancellableMatchesReadAll(t *testing.T) {
+	sizes := []int{0, 1, readChunkBytes - 1, readChunkBytes, readChunkBytes + 1, 3*readChunkBytes + 7}
+	for _, size := range sizes {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			content := bytes.Repeat([]byte("ab"), (size+1)/2)[:size]
+
+			got, err := readAllCancellable(context.Background(), bytes.NewReader(content), DefaultMaxReadBytes)
+			require.NoError(t, err)
+			// Compared as strings: an empty read may come back nil rather than an
+			// empty slice, which is the same thing to readFile (it does
+			// string(data)) and to the length check that drives truncation.
+			assert.Equal(t, string(content), string(got))
+
+			// A limit below the content length stops exactly at the limit, which
+			// is what the truncation marker in readFile depends on.
+			if size > 1 {
+				limit := int64(size - 1)
+				got, err = readAllCancellable(context.Background(), bytes.NewReader(content), limit)
+				require.NoError(t, err)
+				assert.Equal(t, string(content[:limit]), string(got))
+			}
+		})
+	}
+}
+
+// TestReadFileStillReadsWholeFile is the end-to-end guard on the same refactor:
+// a file spanning several chunks must come back intact and unmarked.
+func TestReadFileStillReadsWholeFile(t *testing.T) {
+	exec := New(5*time.Second, 30*time.Second, "")
+
+	tmpFile := filepath.Join(t.TempDir(), "multichunk.bin")
+	content := bytes.Repeat([]byte("0123456789"), readChunkBytes/10*2+3)
+	require.NoError(t, os.WriteFile(tmpFile, content, 0600))
+
+	result, err := exec.Execute(context.Background(), "read_file", map[string]any{"path": tmpFile})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 0, result.ExitCode)
+	assert.Equal(t, string(content), result.Output)
+	assert.NotContains(t, result.Output, "truncated")
+}
+
+// TestListDirRecursiveCancelledMidWalk covers the other unbounded handler: the
+// tree size is whatever the caller pointed at, so the walk checks per entry and
+// aborts rather than enumerating a tree nobody is waiting for.
+//
+// It calls listDirRecursive directly, not through Execute — going through Execute
+// would be satisfied by the entry check alone and would pass even with the
+// per-entry check removed, which is the thing under test here.
+func TestListDirRecursiveCancelledMidWalk(t *testing.T) {
+	exec := New(5*time.Second, 30*time.Second, "")
+
+	// More entries than the walk can finish before the cancellation lands, so the
+	// abort happens mid-tree.
+	dir := t.TempDir()
+	for i := 0; i < 200; i++ {
+		sub := filepath.Join(dir, fmt.Sprintf("d%03d", i))
+		require.NoError(t, os.Mkdir(sub, 0750))
+		require.NoError(t, os.WriteFile(filepath.Join(sub, "f.txt"), []byte("x"), 0600))
+	}
+
+	// Cancelled after the walk has begun: the deadline fires once the first
+	// entries are in, leaving the rest of the tree unvisited.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	result, err := exec.listDirRecursive(ctx, dir)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, 1, result.ExitCode, "a cancelled walk must not report success")
+	assert.Contains(t, result.Error, "tool call aborted")
+	// A cancelled walk is an abort, not a directory problem — misreporting it
+	// would send the operator looking at permissions.
+	assert.NotContains(t, result.Error, "failed to walk directory")
+	assert.Empty(t, result.Output, "a cancelled walk must not return a partial listing")
 }
 
 // TestListDirNonExistent tests listing a non-existent directory

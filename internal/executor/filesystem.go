@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,12 @@ import (
 const (
 	// DefaultMaxReadBytes is the default maximum number of bytes to read from a file
 	DefaultMaxReadBytes = 1024 * 1024 // 1MB
+
+	// readChunkBytes is how much readFile takes per Read call. It bounds how long
+	// the handler can go without observing cancellation: a single io.ReadAll over
+	// the whole cap is one unbreakable call, and on a slow-backed file (network
+	// mount, /dev/*, a fifo) that outlives the caller's deadline.
+	readChunkBytes = 32 * 1024
 )
 
 // readFile reads the contents of a file.
@@ -39,7 +46,7 @@ func (e *Executor) readFile(ctx context.Context, params map[string]any) (*ToolRe
 	}
 	defer func() { _ = f.Close() }()
 
-	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	data, err := readAllCancellable(ctx, f, limit+1)
 	if err != nil {
 		return &ToolResult{Error: fmt.Sprintf("failed to read file: %v", err), ExitCode: 1}, nil //nolint:nilerr // error is captured in ToolResult
 	}
@@ -58,6 +65,30 @@ func (e *Executor) readFile(ctx context.Context, params map[string]any) (*ToolRe
 		Output:   output,
 		ExitCode: 0,
 	}, nil
+}
+
+// readAllCancellable reads up to limit bytes from r, checking ctx between
+// chunks. It is io.ReadAll(io.LimitReader(r, limit)) with a cancellation point:
+// a read that has begun cannot be interrupted, but one chunk is a bounded wait
+// rather than the whole file.
+func readAllCancellable(ctx context.Context, r io.Reader, limit int64) ([]byte, error) {
+	var out []byte
+	chunk := make([]byte, readChunkBytes)
+	for int64(len(out)) < limit {
+		if err := ctx.Err(); err != nil {
+			return nil, err //nolint:wrapcheck // the context error is the message
+		}
+
+		n, err := r.Read(chunk[:min(limit-int64(len(out)), readChunkBytes)])
+		out = append(out, chunk[:n]...)
+		if errors.Is(err, io.EOF) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err //nolint:wrapcheck // caller formats it into the ToolResult
+		}
+	}
+	return out, nil
 }
 
 // sensitivePaths contains directories that write_file should never write to.
@@ -115,7 +146,11 @@ func isSensitivePath(path string) bool {
 // Required params: "path" (string) - the file path to write
 //
 //	"content" (string) - the content to write
-func (e *Executor) writeFile(ctx context.Context, params map[string]any) (*ToolResult, error) {
+//
+// The context is unused past the entry check in Execute: the content is already
+// in memory and the write is a single bounded syscall, so there is no point
+// during it at which cancellation could be observed.
+func (e *Executor) writeFile(_ context.Context, params map[string]any) (*ToolResult, error) {
 	path, err := getStringParam(params, "path")
 	if err != nil {
 		return &ToolResult{Error: err.Error(), ExitCode: 1}, nil //nolint:nilerr // error is captured in ToolResult
@@ -167,7 +202,7 @@ func (e *Executor) listDir(ctx context.Context, params map[string]any) (*ToolRes
 	}
 
 	if recursive {
-		return e.listDirRecursive(path)
+		return e.listDirRecursive(ctx, path)
 	}
 
 	// Non-recursive: list immediate children
@@ -195,10 +230,15 @@ func (e *Executor) listDir(ctx context.Context, params map[string]any) (*ToolRes
 }
 
 // listDirRecursive lists directory contents recursively using filepath.WalkDir.
-func (e *Executor) listDirRecursive(path string) (*ToolResult, error) {
+// A walk is unbounded — the tree size is whatever the caller pointed at — so
+// cancellation is checked per entry and aborts the walk.
+func (e *Executor) listDirRecursive(ctx context.Context, path string) (*ToolResult, error) {
 	var output []string
 
 	err := filepath.WalkDir(path, func(filePath string, d os.DirEntry, err error) error {
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr //nolint:wrapcheck // the context error is the message
+		}
 		if err != nil {
 			return err //nolint:wrapcheck // error is handled at higher level
 		}
@@ -225,6 +265,11 @@ func (e *Executor) listDirRecursive(path string) (*ToolResult, error) {
 	})
 
 	if err != nil {
+		// A cancelled walk is not a directory problem, so it is reported as the
+		// abort it is rather than as a failure to read the tree.
+		if res := cancelled(ctx); res != nil {
+			return res, nil
+		}
 		return &ToolResult{Error: fmt.Sprintf("failed to walk directory: %v", err), ExitCode: 1}, nil //nolint:nilerr // error is captured in ToolResult
 	}
 

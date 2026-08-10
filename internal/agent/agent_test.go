@@ -7,7 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
+	"os/user"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -309,6 +310,7 @@ func TestMessageHandlerProcessing(t *testing.T) {
 		processor:     processor,
 		mode:          &MockMode{},
 		conversations: NewConversationManager(20),
+		allowlist:     connect.NewAllowlist(nil),
 		cfg: &config.Config{
 			Logging: config.LoggingConfig{
 				Level: "info",
@@ -339,40 +341,22 @@ func TestMessageHandlerProcessing(t *testing.T) {
 	}
 }
 
-// TestGetUsername tests the getUsername function
+// TestGetUsername asserts getUsername resolves from the OS and ignores the
+// caller-controlled USER/USERNAME env vars.
 func TestGetUsername(t *testing.T) {
-	// Save original env vars
-	origUser := os.Getenv("USER")
-	origUsername := os.Getenv("USERNAME")
-	defer func() {
-		if origUser != "" {
-			_ = os.Setenv("USER", origUser)
-		}
-		if origUsername != "" {
-			_ = os.Setenv("USERNAME", origUsername)
-		}
-	}()
-
-	// Test with USER env var
-	if err := os.Setenv("USER", "testuser"); err != nil {
-		t.Fatalf("failed to set USER: %v", err)
+	current, err := user.Current()
+	if err != nil {
+		t.Fatalf("user.Current() failed: %v", err)
 	}
-	username := getUsername()
-	if username == "" {
-		t.Error("expected non-empty username")
+	if got := getUsername(); got != current.Username {
+		t.Errorf("getUsername() = %q, want %q", got, current.Username)
 	}
 
-	// Test fallback
-	if err := os.Unsetenv("USER"); err != nil {
-		t.Fatalf("failed to unset USER: %v", err)
-	}
-	if err := os.Unsetenv("USERNAME"); err != nil {
-		t.Fatalf("failed to unset USERNAME: %v", err)
-	}
-	username = getUsername()
-	// Should still return something (might be "unknown" or from fallback)
-	if username == "" {
-		t.Error("expected non-empty username even with no env vars")
+	// Env vars must not influence the result.
+	t.Setenv("USER", "spoofed")
+	t.Setenv("USERNAME", "spoofed")
+	if got := getUsername(); got != current.Username {
+		t.Errorf("getUsername() = %q after env spoofing, want %q", got, current.Username)
 	}
 }
 
@@ -404,6 +388,7 @@ func TestMessageHandlerError(t *testing.T) {
 		processor:     processor,
 		mode:          mockMode,
 		conversations: NewConversationManager(20),
+		allowlist:     connect.NewAllowlist(nil),
 		cfg: &config.Config{
 			Logging: config.LoggingConfig{
 				Level: "info",
@@ -429,15 +414,15 @@ func TestMessageHandlerError(t *testing.T) {
 }
 
 // newPassthroughAgent builds an agent in passthrough mode (processor == nil)
-// with a real executor whose dangerous-command checker is enabled, mirroring
-// production wiring.
+// with a real executor whose command policy has the destructive rules enabled,
+// mirroring production wiring.
 func newPassthroughAgent(t *testing.T, challenge string) (*Agent, *MockMode) {
 	t.Helper()
 	if err := logging.Setup("info", "json", ""); err != nil {
 		t.Fatalf("failed to setup logging: %v", err)
 	}
 	exec := executor.New(30*time.Second, 5*time.Minute, "")
-	exec.SetDangerousChecker(security.NewDangerousChecker())
+	exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{BlockDangerous: true}))
 	mockMode := &MockMode{}
 	agent := &Agent{
 		logger:         logging.Get(),
@@ -446,6 +431,7 @@ func newPassthroughAgent(t *testing.T, challenge string) (*Agent, *MockMode) {
 		mode:           mockMode,
 		conversations:  NewConversationManager(20),
 		challengeStore: security.NewChallengeStore(challenge),
+		allowlist:      connect.NewAllowlist(nil),
 		cfg: &config.Config{
 			AI:      config.AIConfig{Mode: config.AIModePassthrough},
 			Logging: config.LoggingConfig{Level: "info"},
@@ -518,6 +504,168 @@ func TestPassthroughDangerousCommandPromptsChallenge(t *testing.T) {
 
 	if !strings.Contains(mockMode.sentText, "requires confirmation") {
 		t.Errorf("expected challenge confirmation prompt, got %q", mockMode.sentText)
+	}
+}
+
+// TestPassthroughSecretReadGetsNoChallengePrompt is the agent-level half of the
+// hard/confirmable split. A config/secret read must be refused outright, never
+// offered as a challenge: the response would arrive over the same chat channel
+// whose credentials the lockdown protects, so a leaked or coerced passphrase
+// would unlock exactly the secrets at stake. Before consolidation every block
+// carried the same "Command blocked:" prefix, and executeToolGuarded offered a
+// challenge for all of them.
+func TestPassthroughSecretReadGetsNoChallengePrompt(t *testing.T) {
+	ciphertext, err := security.EncryptChallenge("test-passphrase")
+	if err != nil {
+		t.Fatalf("failed to build challenge: %v", err)
+	}
+	agent, mockMode := newPassthroughAgent(t, ciphertext)
+	defer agent.challengeStore.Close()
+
+	// Re-wire the executor with the lockdown rule group active, as agent.New does.
+	dir := t.TempDir()
+	guard := executor.NewGuard(true, []string{dir})
+	agent.exec.SetGuard(guard)
+	agent.exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{
+		BlockDangerous:   true,
+		BlockSecretReads: true,
+		ProtectedPaths:   guard.ProtectedPaths(),
+	}))
+
+	protected := filepath.Join(dir, "config.yaml")
+	// "sudo cat <protected>" matches privilege escalation (confirmable) as well
+	// as a protected-path read (hard). The hard denial must win.
+	msg := connect.IncomingMessage{
+		SpaceID: "space-1",
+		Email:   "user@example.com",
+		Text:    "sudo cat " + protected,
+	}
+	agent.messageHandler(context.Background(), msg)
+
+	if strings.Contains(mockMode.sentText, "requires confirmation") {
+		t.Errorf("secret reads must not be offered as a challenge, got %q", mockMode.sentText)
+	}
+	if !strings.Contains(mockMode.sentText, "local administration") {
+		t.Errorf("expected a hard-denial message, got %q", mockMode.sentText)
+	}
+	// Nothing may be pending: replying with the correct passphrase must find no
+	// stored command to run.
+	if pc, ok := agent.challengeStore.CheckResponse("space-1", "test-passphrase"); ok {
+		t.Errorf("no pending challenge may be registered for a hard denial, got %q", pc.Command)
+	}
+}
+
+// TestAuthorizeChokePoint is the regression guard for the wmcp authz gap: the
+// allowlist decision lives in Agent.messageHandler, so it applies to every
+// connection mode identically. RoomType "group" is what WMCPMode reports (a
+// relay cannot prove a 1:1 space), so the group cases below are the wmcp cases.
+func TestAuthorizeChokePoint(t *testing.T) {
+	tests := []struct {
+		name     string
+		allowed  []string
+		email    string
+		roomType string
+		want     bool
+	}{
+		// wmcp mode reports RoomType "group".
+		{"wmcp unlisted sender denied", []string{"alice@example.com"}, "eve@evil.com", "group", false},
+		{"wmcp listed sender allowed", []string{"alice@example.com"}, "alice@example.com", "group", true},
+		{"wmcp listed sender case-insensitive", []string{"Alice@Example.com"}, "ALICE@example.COM", "group", true},
+		{"wmcp empty allowlist denies everyone", nil, "anyone@example.com", "group", false},
+
+		// native group rooms — same strict semantics.
+		{"native group unlisted denied", []string{"alice@example.com"}, "eve@evil.com", "group", false},
+		{"native group empty allowlist denies", nil, "alice@example.com", "group", false},
+
+		// native direct messages — empty list is permissive by design.
+		{"direct unlisted denied when list populated", []string{"alice@example.com"}, "eve@evil.com", "direct", false},
+		{"direct listed allowed", []string{"alice@example.com"}, "alice@example.com", "direct", true},
+		{"direct empty allowlist allows all", nil, "anyone@example.com", "direct", true},
+		{"empty roomType treated as direct", nil, "anyone@example.com", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Agent{allowlist: connect.NewAllowlist(tt.allowed)}
+			got := a.authorize(connect.IncomingMessage{Email: tt.email, RoomType: tt.roomType})
+			if got != tt.want {
+				t.Errorf("authorize(%q, %q) = %v, want %v", tt.email, tt.roomType, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAuthorizeFailsClosedWithoutAllowlist verifies a misconstructed Agent
+// denies rather than admits. Authorization must never depend on a field having
+// been remembered.
+func TestAuthorizeFailsClosedWithoutAllowlist(t *testing.T) {
+	a := &Agent{}
+	if a.authorize(connect.IncomingMessage{Email: "anyone@example.com", RoomType: "direct"}) {
+		t.Error("authorize() with nil allowlist must deny")
+	}
+}
+
+// TestMessageHandlerRejectsUnauthorizedSender proves the gate is wired into the
+// request path — an unauthorized sender reaches neither the executor nor a
+// reply. Uses passthrough mode so a pass would visibly execute a command.
+func TestMessageHandlerRejectsUnauthorizedSender(t *testing.T) {
+	agent, mockMode := newPassthroughAgent(t, "")
+	defer agent.challengeStore.Close()
+
+	// Populated allowlist that does not include the sender.
+	agent.allowlist = connect.NewAllowlist([]string{"alice@example.com"})
+
+	agent.messageHandler(context.Background(), connect.IncomingMessage{
+		SpaceID:  "space-1",
+		Email:    "eve@evil.com",
+		Text:     "echo unauthorized_ran",
+		RoomType: "direct",
+	})
+
+	if mockMode.sentText != "" {
+		t.Errorf("unauthorized sender got a reply: %q", mockMode.sentText)
+	}
+}
+
+// TestMessageHandlerRejectsUnauthorizedWMCPSender is the same check for the
+// wmcp path: RoomType "group" with an empty allowlist must deny, which is the
+// exact configuration that ran unauthorized before this fix.
+func TestMessageHandlerRejectsUnauthorizedWMCPSender(t *testing.T) {
+	agent, mockMode := newPassthroughAgent(t, "")
+	defer agent.challengeStore.Close()
+
+	// Empty allowlist — the default that wmcp mode previously ignored entirely.
+	agent.allowlist = connect.NewAllowlist(nil)
+
+	agent.messageHandler(context.Background(), connect.IncomingMessage{
+		SpaceID:  "space-1",
+		Email:    "relay-forwarded@anywhere.com",
+		Text:     "echo wmcp_unauthorized_ran",
+		RoomType: "group", // what WMCPMode reports
+	})
+
+	if mockMode.sentText != "" {
+		t.Errorf("unauthorized wmcp sender got a reply: %q", mockMode.sentText)
+	}
+}
+
+// TestMessageHandlerAllowsAuthorizedSender is the positive control: the same
+// path with the sender listed must execute and reply.
+func TestMessageHandlerAllowsAuthorizedSender(t *testing.T) {
+	agent, mockMode := newPassthroughAgent(t, "")
+	defer agent.challengeStore.Close()
+
+	agent.allowlist = connect.NewAllowlist([]string{"alice@example.com"})
+
+	agent.messageHandler(context.Background(), connect.IncomingMessage{
+		SpaceID:  "space-1",
+		Email:    "alice@example.com",
+		Text:     "echo authorized_ran",
+		RoomType: "group",
+	})
+
+	if !strings.Contains(mockMode.sentText, "authorized_ran") {
+		t.Errorf("authorized sender did not get command output, got %q", mockMode.sentText)
 	}
 }
 

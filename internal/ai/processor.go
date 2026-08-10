@@ -8,7 +8,11 @@ import (
 	"time"
 )
 
-// Converser interface for mocking Bedrock in tests
+// Converser is the inference seam: one round-trip to a model, given a system
+// prompt, conversation history, and the available tools. Implemented by inferd
+// (local daemon over a Unix socket / named pipe) and openai-compat (any
+// OpenAI-compatible HTTP endpoint), and mocked in tests to drive the agentic
+// loop without a real model. See ADR 0001.
 type Converser interface {
 	Converse(
 		ctx context.Context,
@@ -103,7 +107,7 @@ func (p *Processor) Process(
 
 	// Run agentic loop
 	for iteration := 0; iteration < p.maxIter; iteration++ {
-		// Call Bedrock Converse
+		// Call the model
 		response, err := p.converser.Converse(
 			ctx,
 			p.systemPrompt,

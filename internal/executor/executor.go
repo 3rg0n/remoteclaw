@@ -13,15 +13,21 @@ type ToolResult struct {
 	Output   string `json:"output"`
 	Error    string `json:"error,omitempty"`
 	ExitCode int    `json:"exit_code"`
+
+	// Denial carries the policy verdict when a command was refused by the
+	// command policy. Callers that need to know *how* a command was refused —
+	// notably the challenge-response handoff, which may only offer confirmation
+	// for a confirmable disposition — must read this rather than parse Error.
+	Denial *security.Verdict `json:"-"`
 }
 
 // Executor dispatches tool calls to handlers
 type Executor struct {
-	defaultTimeout   time.Duration
-	maxTimeout       time.Duration
-	shell            string
-	dangerousChecker *security.DangerousChecker
-	guard            *Guard
+	defaultTimeout time.Duration
+	maxTimeout     time.Duration
+	shell          string
+	policy         *security.CommandPolicy
+	guard          *Guard
 }
 
 // New creates a new Executor with the given configuration.
@@ -36,14 +42,16 @@ func New(defaultTimeout, maxTimeout time.Duration, shell string) *Executor {
 	}
 }
 
-// SetDangerousChecker enables dangerous command checking on execute_command calls.
-func (e *Executor) SetDangerousChecker(dc *security.DangerousChecker) {
-	e.dangerousChecker = dc
+// SetCommandPolicy installs the deny-list policy applied to execute_command.
+// One policy covers destructive commands and config/secret reads alike; which
+// rule groups it carries is decided when it is built. See ADR 0006.
+func (e *Executor) SetCommandPolicy(p *security.CommandPolicy) {
+	e.policy = p
 }
 
-// SetGuard enables the config/secret lockdown guard. When set and enabled, the
-// file tools hard-deny protected paths and execute_command best-effort denies
-// secret-reading commands.
+// SetGuard enables the config/secret lockdown guard, which hard-denies the file
+// tools (read_file, write_file, list_dir) on protected paths. Command-string
+// matching for secret reads lives in the command policy, not here.
 func (e *Executor) SetGuard(g *Guard) {
 	e.guard = g
 }
@@ -52,34 +60,30 @@ func (e *Executor) SetGuard(g *Guard) {
 // toolName specifies which tool to call, and params are the tool arguments.
 // Returns a ToolResult with the tool output or error information.
 func (e *Executor) Execute(ctx context.Context, toolName string, params map[string]any) (*ToolResult, error) {
-	// Check dangerous commands before executing
-	if toolName == "execute_command" && e.dangerousChecker != nil {
+	// An abandoned request must not touch the system. Checked once here instead
+	// of in seven handlers: by the time a tool call is dispatched the caller's
+	// deadline (the processor's 5-minute cap, or a per-command timeout) may
+	// already have passed, and a write or a kill nobody is waiting for is still
+	// a side effect. Handlers whose body can block — readFile, the recursive
+	// walk — check again as they go, since cancellation also arrives mid-call.
+	if res := cancelled(ctx); res != nil {
+		return res, nil
+	}
+
+	// Single command-policy evaluation for execute_command: destructive
+	// commands and config/secret reads are one rule table with one ordering, so
+	// there is one place to add a rule and one denial shape to audit.
+	// See ADR 0006.
+	if toolName == "execute_command" {
 		if cmd, ok := params["command"].(string); ok {
-			if blocked, reason := e.dangerousChecker.Check(cmd); blocked {
-				return &ToolResult{
-					Output:   "",
-					Error:    fmt.Sprintf("Command blocked: %s", reason),
-					ExitCode: 1,
-				}, nil
+			if v := e.policy.Check(cmd); v != nil {
+				return denied(v), nil
 			}
 		}
 	}
 
-	// Lockdown guard: best-effort deny of secret-reading commands. The
-	// authoritative protection is the OS file permission (config/secrets not
-	// readable by the service account); this is defense-in-depth. See guard.go.
-	if toolName == "execute_command" && e.guard.Enabled() {
-		if cmd, ok := params["command"].(string); ok {
-			if blocked, reason := e.guard.IsSecretReadCommand(cmd); blocked {
-				return &ToolResult{
-					Error:    fmt.Sprintf("Command blocked by lockdown: %s (config/secret access requires local administration)", reason),
-					ExitCode: 1,
-				}, nil
-			}
-		}
-	}
-
-	// Lockdown guard: hard-deny file tools on protected paths.
+	// Lockdown guard: hard-deny file tools on protected paths. Path-based and
+	// canonicalizing, so it stays separate from command-string matching.
 	if e.guard.Enabled() {
 		if blocked, res := e.guardFileTool(toolName, params); blocked {
 			return res, nil
@@ -89,16 +93,48 @@ func (e *Executor) Execute(ctx context.Context, toolName string, params map[stri
 	return e.dispatch(ctx, toolName, params)
 }
 
-// ForceExecuteCommand runs a command after challenge-response confirmation.
-// Re-validates the command against the dangerous checker but logs it as
-// a confirmed execution. Still enforces timeouts.
+// cancelled reports a cancelled or expired context as a tool result, or nil if
+// the context is still live. The error text names the cause (deadline vs.
+// cancellation) because the two mean different things to the operator: a
+// deadline is the request taking too long, a cancellation is shutdown.
+func cancelled(ctx context.Context) *ToolResult {
+	err := ctx.Err()
+	if err == nil {
+		return nil
+	}
+	return &ToolResult{Error: fmt.Sprintf("tool call aborted: %v", err), ExitCode: 1}
+}
+
+// denied renders a policy verdict as a tool result. One shape for every
+// command denial, whatever the category, so the audit log and the model see a
+// consistent message.
+func denied(v *security.Verdict) *ToolResult {
+	msg := fmt.Sprintf("Command blocked: %s", v.Reason)
+	if v.Disposition == security.DispositionHard {
+		msg += " (config/secret access requires local administration)"
+	}
+	return &ToolResult{Error: msg, ExitCode: 1, Denial: v}
+}
+
+// ForceExecuteCommand runs a command the operator confirmed via
+// challenge-response.
+//
+// It re-checks the hard-denial rules. Confirmation proves the operator intended
+// a destructive command; it does not authorize config/secret access, because
+// the response travels over the same chat channel whose credentials the
+// lockdown protects. Confirmable denials are, by definition, not re-applied.
 func (e *Executor) ForceExecuteCommand(ctx context.Context, command string) (*ToolResult, error) {
 	if command == "" {
 		return &ToolResult{Error: "empty command", ExitCode: 1}, nil
 	}
-	// Re-validate: the dangerous checker patterns may have been updated since the
-	// challenge was issued. Log but allow if the checker still blocks — the user
-	// already confirmed via challenge-response.
+	// Confirmation arrives as a separate message, so time has passed since the
+	// command was proposed; this path bypasses Execute and needs its own check.
+	if res := cancelled(ctx); res != nil {
+		return res, nil
+	}
+	if v := e.policy.CheckHard(command); v != nil {
+		return denied(v), nil
+	}
 	return e.executeCommand(ctx, map[string]any{"command": command})
 }
 

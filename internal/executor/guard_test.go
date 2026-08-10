@@ -3,7 +3,10 @@ package executor
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/3rg0n/remoteclaw/internal/security"
 )
 
 func TestGuardDisabledAllowsEverything(t *testing.T) {
@@ -14,8 +17,10 @@ func TestGuardDisabledAllowsEverything(t *testing.T) {
 	if g.IsProtectedPath("/etc/remoteclaw/config.yaml") {
 		t.Error("disabled guard must not protect any path")
 	}
-	if blocked, _ := g.IsSecretReadCommand("pass show remoteclaw/webex_bot_token"); blocked {
-		t.Error("disabled guard must not block any command")
+	// A disabled guard exposes no protected paths, so the command policy built
+	// from it carries no protected-path rule.
+	if paths := g.ProtectedPaths(); len(paths) != 0 {
+		t.Errorf("disabled guard must expose no protected paths, got %v", paths)
 	}
 }
 
@@ -52,39 +57,30 @@ func TestGuardProtectedPathRelativeBypass(t *testing.T) {
 	}
 }
 
-func TestGuardSecretReadCommands(t *testing.T) {
-	dir := t.TempDir()
-	protected := filepath.Join(dir, "config.yaml")
-	g := NewGuard(true, []string{protected})
+// TestGuardProtectedPathsCanonicalized verifies the guard hands the command
+// policy canonicalized paths — the policy matches path literals in a command
+// string and cannot canonicalize on its own.
+func TestGuardProtectedPathsCanonicalized(t *testing.T) {
+	// A relative path: canonicalization must make it absolute, or the policy
+	// would be matching a literal that never appears in a real command.
+	const relative = "config.yaml"
+	g := NewGuard(true, []string{relative, ""})
 
-	blockedCmds := []string{
-		"pass show remoteclaw/webex_bot_token",
-		"pass ls",
-		"gpg -d secret.gpg",
-		"gpg --decrypt secret.gpg",
-		"printenv",
-		"env",
-		"echo $CHALLENGE",
-		"cat /proc/self/environ",
-		"echo $env:WEBEX_BOT_TOKEN",
-		"cat " + protected, // direct read of a protected path
+	paths := g.ProtectedPaths()
+	if len(paths) != 1 {
+		t.Fatalf("expected 1 protected path (empty entries dropped), got %v", paths)
 	}
-	for _, cmd := range blockedCmds {
-		if blocked, _ := g.IsSecretReadCommand(cmd); !blocked {
-			t.Errorf("expected command to be blocked: %q", cmd)
-		}
+	if !filepath.IsAbs(paths[0]) {
+		t.Errorf("ProtectedPaths()[0] = %q, want an absolute path", paths[0])
+	}
+	if want := canonPath(relative); paths[0] != want {
+		t.Errorf("ProtectedPaths()[0] = %q, want canonicalized %q", paths[0], want)
 	}
 
-	allowedCmds := []string{
-		"ls -la /tmp",
-		"echo hello",
-		"df -h",
-		"systemctl status nginx",
-	}
-	for _, cmd := range allowedCmds {
-		if blocked, reason := g.IsSecretReadCommand(cmd); blocked {
-			t.Errorf("expected command to be allowed: %q (blocked as: %s)", cmd, reason)
-		}
+	// The returned slice is a copy: a caller cannot mutate the guard's state.
+	paths[0] = "/mutated"
+	if g.ProtectedPaths()[0] == "/mutated" {
+		t.Error("ProtectedPaths must return a copy, not the guard's own slice")
 	}
 }
 
@@ -112,10 +108,37 @@ func TestExecutorGuardBlocksFileTools(t *testing.T) {
 	if res.ExitCode == 0 {
 		t.Error("write_file on protected path should be blocked")
 	}
+}
 
-	// execute_command reading the protected path is denied (best-effort).
-	res, _ = e.Execute(ctx, "execute_command", map[string]any{"command": "cat " + protected})
+// TestExecutorPolicyBlocksSecretReadCommand verifies the secret-read half of the
+// lockdown still reaches execute_command after moving into the command policy —
+// wired the way agent.New wires it, from the guard's canonicalized paths.
+func TestExecutorPolicyBlocksSecretReadCommand(t *testing.T) {
+	dir := t.TempDir()
+	protected := filepath.Join(dir, "config.yaml")
+	g := NewGuard(true, []string{dir})
+	e := New(0, 0, "")
+	e.SetGuard(g)
+	e.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{
+		BlockSecretReads: g.Enabled(),
+		ProtectedPaths:   g.ProtectedPaths(),
+	}))
+
+	res, err := e.Execute(context.Background(), "execute_command",
+		map[string]any{"command": "cat " + protected})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if res.ExitCode == 0 {
-		t.Error("execute_command reading protected path should be blocked")
+		t.Fatal("execute_command reading protected path should be blocked")
+	}
+	if res.Denial == nil {
+		t.Fatal("a policy denial must be reported on ToolResult.Denial")
+	}
+	if res.Denial.Disposition != security.DispositionHard {
+		t.Errorf("secret reads must be hard denials, got %v", res.Denial.Disposition)
+	}
+	if !strings.Contains(res.Error, "requires local administration") {
+		t.Errorf("hard denial should say confirmation is not available, got %q", res.Error)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -13,19 +14,34 @@ import (
 )
 
 // WMCPMode implements Mode using a WebSocket connection to a WMCP backend relay server.
+//
+// Authorization is not performed here: the email allowlist is enforced at the
+// single choke point in Agent.messageHandler, which every Mode feeds. WMCPMode's
+// obligation is to report provenance honestly — see readLoop, where RoomType is
+// reported as "group" because the relay protocol carries no room-type field and
+// "group" is the strict interpretation (empty allowlist denies).
 type WMCPMode struct {
 	endpoint string
 	token    string
 	handler  MessageHandler
 	logger   zerolog.Logger
 
-	conn   *websocket.Conn
+	// conn is replaced wholesale on reconnect while readLoop/heartbeatLoop are
+	// running, so it is published atomically. A mutex is unnecessary here:
+	// websocket.Conn's methods are safe for concurrent use (except Read, which
+	// only ever runs on the readLoop goroutine), and holding a lock across a
+	// blocking Write would serialize heartbeats behind responses.
+	conn   atomic.Pointer[websocket.Conn]
 	cancel context.CancelFunc
 	done   chan struct{}
-	mu     sync.Mutex // protects conn writes
 
 	// requestIDs tracks the request_id for each space to include in responses
 	requestIDs sync.Map // map[spaceID]requestID
+}
+
+// currentConn returns the active connection, or nil before Connect succeeds.
+func (wm *WMCPMode) currentConn() *websocket.Conn {
+	return wm.conn.Load()
 }
 
 // NewWMCPMode creates a new WMCPMode instance.
@@ -54,21 +70,21 @@ func (wm *WMCPMode) Connect(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to dial WMCP endpoint: %w", err)
 	}
-	wm.conn = conn
+	wm.conn.Store(conn)
 
 	// Authenticate
 	if err := wm.sendEnvelope(ctx, WMCPEnvelope{
 		Type:  "auth",
 		Token: wm.token,
 	}); err != nil {
-		_ = wm.conn.Close(websocket.StatusAbnormalClosure, "auth send failed")
+		_ = conn.Close(websocket.StatusAbnormalClosure, "auth send failed")
 		return fmt.Errorf("failed to send auth message: %w", err)
 	}
 
 	// Wait for auth response
 	authResp, err := wm.readEnvelope(ctx)
 	if err != nil {
-		_ = wm.conn.Close(websocket.StatusAbnormalClosure, "auth read failed")
+		_ = conn.Close(websocket.StatusAbnormalClosure, "auth read failed")
 		return fmt.Errorf("failed to read auth response: %w", err)
 	}
 
@@ -76,10 +92,10 @@ func (wm *WMCPMode) Connect(ctx context.Context) error {
 	case "auth_ok":
 		wm.logger.Info().Msg("WMCP authentication successful")
 	case "auth_error":
-		_ = wm.conn.Close(websocket.StatusNormalClosure, "auth failed")
+		_ = conn.Close(websocket.StatusNormalClosure, "auth failed")
 		return fmt.Errorf("WMCP authentication failed: %s", authResp.Error)
 	default:
-		_ = wm.conn.Close(websocket.StatusAbnormalClosure, "unexpected response")
+		_ = conn.Close(websocket.StatusAbnormalClosure, "unexpected response")
 		return fmt.Errorf("unexpected auth response type: %s", authResp.Type)
 	}
 
@@ -132,8 +148,8 @@ func (wm *WMCPMode) Close() error {
 		}
 	}
 
-	if wm.conn != nil {
-		return wm.conn.Close(websocket.StatusNormalClosure, "agent shutting down")
+	if conn := wm.currentConn(); conn != nil {
+		return conn.Close(websocket.StatusNormalClosure, "agent shutting down")
 	}
 	return nil
 }
@@ -167,12 +183,19 @@ func (wm *WMCPMode) readLoop(ctx context.Context) {
 			// Store request_id for response
 			wm.requestIDs.Store(env.SpaceID, env.RequestID)
 
+			// RoomType is reported as "group" — the strict setting — because the
+			// WMCP envelope carries no room-type field. A relay cannot prove a
+			// message came from a 1:1 space, so the agent's authz choke point
+			// must not grant it the permissive direct-message semantics
+			// (empty allowlist = allow anyone). With "group", an unset
+			// allowed_emails denies every sender rather than admitting all.
 			msg := IncomingMessage{
 				ID:       env.RequestID,
 				SpaceID:  env.SpaceID,
 				PersonID: env.PersonID,
 				Email:    env.Email,
 				Text:     env.Text,
+				RoomType: "group",
 			}
 
 			if wm.handler != nil {
@@ -235,9 +258,7 @@ func (wm *WMCPMode) reconnect(ctx context.Context) bool {
 		}
 
 		// Re-authenticate
-		wm.mu.Lock()
-		wm.conn = conn
-		wm.mu.Unlock()
+		wm.conn.Store(conn)
 
 		if err := wm.sendEnvelope(ctx, WMCPEnvelope{
 			Type:  "auth",
@@ -262,20 +283,30 @@ func (wm *WMCPMode) reconnect(ctx context.Context) bool {
 
 // sendEnvelope writes a JSON envelope to the WebSocket.
 func (wm *WMCPMode) sendEnvelope(ctx context.Context, env WMCPEnvelope) error {
-	wm.mu.Lock()
-	defer wm.mu.Unlock()
+	conn := wm.currentConn()
+	if conn == nil {
+		return fmt.Errorf("not connected")
+	}
 
 	data, err := json.Marshal(env)
 	if err != nil {
 		return fmt.Errorf("failed to marshal envelope: %w", err)
 	}
 
-	return wm.conn.Write(ctx, websocket.MessageText, data)
+	return conn.Write(ctx, websocket.MessageText, data)
 }
 
 // readEnvelope reads and decodes a JSON envelope from the WebSocket.
+// Only ever called from the readLoop goroutine (and from Connect/reconnect
+// before that goroutine starts reading), since websocket.Conn.Read is the one
+// method that is not safe for concurrent use.
 func (wm *WMCPMode) readEnvelope(ctx context.Context) (*WMCPEnvelope, error) {
-	_, data, err := wm.conn.Read(ctx)
+	conn := wm.currentConn()
+	if conn == nil {
+		return nil, fmt.Errorf("not connected")
+	}
+
+	_, data, err := conn.Read(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read from WebSocket: %w", err)
 	}

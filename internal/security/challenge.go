@@ -151,13 +151,6 @@ func (cs *ChallengeStore) CheckResponse(spaceID, text string) (*PendingChallenge
 	return pc, true
 }
 
-// ClearPending removes any pending challenge for the given space.
-func (cs *ChallengeStore) ClearPending(spaceID string) {
-	cs.mu.Lock()
-	defer cs.mu.Unlock()
-	delete(cs.pending, spaceID)
-}
-
 // Close stops the background cleanup goroutine.
 func (cs *ChallengeStore) Close() {
 	select {

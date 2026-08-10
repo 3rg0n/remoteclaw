@@ -619,6 +619,86 @@ func TestPassthroughMode(t *testing.T) {
 	assert.False(t, (&Config{AI: AIConfig{Mode: ""}}).PassthroughMode())
 }
 
+func TestValidateHealthAddr(t *testing.T) {
+	tests := []struct {
+		name             string
+		addr             string
+		enabled          bool
+		allowNonLoopback bool
+		wantErr          string
+	}{
+		// Loopback — accepted.
+		{name: "ipv4 loopback", addr: "127.0.0.1:9090", enabled: true},
+		{name: "ipv4 loopback alt", addr: "127.0.0.53:9090", enabled: true},
+		{name: "localhost", addr: "localhost:9090", enabled: true},
+		{name: "localhost mixed case", addr: "LocalHost:9090", enabled: true},
+		{name: "ipv6 loopback", addr: "[::1]:9090", enabled: true},
+
+		// Non-loopback — rejected.
+		{name: "all interfaces ipv4", addr: "0.0.0.0:9090", enabled: true,
+			wantErr: "binds non-loopback address"},
+		{name: "lan address", addr: "192.168.1.5:9090", enabled: true,
+			wantErr: "binds non-loopback address"},
+		{name: "empty host", addr: ":9090", enabled: true,
+			wantErr: "binds all interfaces"},
+		{name: "ipv6 unspecified", addr: "[::]:9090", enabled: true,
+			wantErr: "binds non-loopback address"},
+
+		// Hostnames are rejected: DNS resolution is not a durable guarantee.
+		{name: "hostname", addr: "health.internal:9090", enabled: true,
+			wantErr: "must be an IP literal"},
+
+		// Malformed.
+		{name: "no port", addr: "127.0.0.1", enabled: true, wantErr: "invalid health.addr"},
+		{name: "empty", addr: "", enabled: true, wantErr: "invalid health.addr"},
+		{name: "garbage", addr: "not::a::host", enabled: true, wantErr: "invalid health.addr"},
+
+		// Opt-out paths.
+		{name: "non-loopback allowed by opt-in", addr: "0.0.0.0:9090", enabled: true,
+			allowNonLoopback: true},
+		{name: "health disabled skips validation", addr: "0.0.0.0:9090", enabled: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{Health: HealthConfig{
+				Enabled:          tt.enabled,
+				Addr:             tt.addr,
+				AllowNonLoopback: tt.allowNonLoopback,
+			}}
+			err := cfg.validateHealthAddr()
+			if tt.wantErr == "" {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// TestValidateRejectsNonLoopbackHealthAddr proves the check is reachable from
+// Load(), not just callable in isolation.
+func TestValidateRejectsNonLoopbackHealthAddr(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.yaml")
+
+	configContent := `
+mode: native
+webex:
+  bot_token: "test-token"
+health:
+  enabled: true
+  addr: "0.0.0.0:9090"
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(configContent), 0600))
+
+	cfg, err := Load(configPath)
+	assert.Nil(t, cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "binds non-loopback address")
+}
+
 // fakeGetter is a test double for secrets.Getter.
 type fakeGetter struct {
 	available bool

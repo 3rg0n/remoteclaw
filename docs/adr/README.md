@@ -14,3 +14,5 @@ Format: [Nygard short form](https://github.blog/engineering/architecture-optimiz
 | [0002](0002-passthrough-mode.md) | Passthrough mode: execute inbound messages directly, no local inference | accepted |
 | [0003](0003-secret-storage-and-config-lockdown.md) | Secret storage via `pass`, and OS-enforced config/secret lockdown | accepted |
 | [0004](0004-privilege-separated-executor.md) | Security posture: best-effort defense-in-depth, run as the installing user | accepted |
+| [0005](0005-single-authorization-choke-point.md) | Authorization is a single choke point in the agent, not a Mode concern | accepted |
+| [0006](0006-one-command-policy-with-tagged-rules.md) | One command deny-list engine, with tagged rules (category + disposition) | accepted |

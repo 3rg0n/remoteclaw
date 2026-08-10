@@ -2,13 +2,15 @@ package connect
 
 import (
 	"strings"
-	"sync"
 )
 
-// Allowlist manages email-based access control
+// Allowlist manages email-based access control.
+//
+// Immutable after construction: emails is populated once in NewAllowlist and
+// never written again, so it is safe for concurrent readers without locking.
+// Config is read once at startup; there is no runtime reload path.
 type Allowlist struct {
 	emails map[string]bool
-	mu     sync.RWMutex
 }
 
 // NewAllowlist creates an allowlist from a slice of emails.
@@ -33,9 +35,6 @@ func NewAllowlist(emails []string) *Allowlist {
 // Case-insensitive comparison.
 // If allowlist is empty (nil or 0 entries), returns true (all allowed).
 func (a *Allowlist) IsAllowed(email string) bool {
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
 	// If allowlist is empty, allow all
 	if len(a.emails) == 0 {
 		return true
@@ -55,9 +54,6 @@ func (a *Allowlist) IsAllowedInRoom(email string, roomType string) bool {
 		return a.IsAllowed(email)
 	}
 
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
 	// In group rooms, require explicit allowlist entry
 	if len(a.emails) == 0 {
 		return false
@@ -67,21 +63,3 @@ func (a *Allowlist) IsAllowedInRoom(email string, roomType string) bool {
 	return a.emails[normalizedEmail]
 }
 
-// Reload updates the allowlist with a new set of emails.
-// Thread-safe.
-func (a *Allowlist) Reload(emails []string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	// Clear the existing allowlist
-	a.emails = make(map[string]bool)
-
-	// Add new emails
-	for _, email := range emails {
-		// Normalize to lowercase for case-insensitive comparison
-		normalizedEmail := strings.ToLower(strings.TrimSpace(email))
-		if normalizedEmail != "" {
-			a.emails[normalizedEmail] = true
-		}
-	}
-}

@@ -69,7 +69,7 @@ func newTestAgent(t *testing.T, converser ai.Converser, opts ...func(*Agent)) *A
 	}
 
 	exec := executor.New(30*time.Second, 5*time.Minute, "")
-	exec.SetDangerousChecker(security.NewDangerousChecker())
+	exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{BlockDangerous: true}))
 
 	processor := ai.NewProcessor(ai.ProcessorConfig{
 		Converser:     converser,
@@ -100,7 +100,10 @@ func newTestAgent(t *testing.T, converser ai.Converser, opts ...func(*Agent)) *A
 		logger:        logging.Get(),
 		conversations: NewConversationManager(20),
 		rateLimiter:   security.NewRateLimiter(10, 3),
-		startTime:     time.Now(),
+		// Empty allowlist: permissive for direct messages (RoomType ""), which
+		// is what these tests send. Mirrors production wiring in New().
+		allowlist: connect.NewAllowlist(nil),
+		startTime: time.Now(),
 	}
 
 	for _, opt := range opts {
@@ -278,7 +281,7 @@ func TestIntegration_DangerousCommandBlocking(t *testing.T) {
 		MaxIterations: 5,
 		ExecuteTool: func(ctx context.Context, toolName string, params map[string]any) (string, error) {
 			exec := executor.New(30*time.Second, 5*time.Minute, "")
-			exec.SetDangerousChecker(security.NewDangerousChecker())
+			exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{BlockDangerous: true}))
 			result, err := exec.Execute(ctx, toolName, params)
 			if err != nil {
 				return "", err
@@ -362,7 +365,7 @@ func TestIntegration_ChallengeResponse(t *testing.T) {
 		MaxIterations: 5,
 		ExecuteTool: func(ctx context.Context, toolName string, params map[string]any) (string, error) {
 			exec := executor.New(30*time.Second, 5*time.Minute, "")
-			exec.SetDangerousChecker(security.NewDangerousChecker())
+			exec.SetCommandPolicy(security.NewCommandPolicy(security.CommandPolicyOptions{BlockDangerous: true}))
 			result, err := exec.Execute(ctx, toolName, params)
 			if err != nil {
 				return "", err
