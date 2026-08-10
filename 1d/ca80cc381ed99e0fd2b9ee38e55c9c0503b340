@@ -1,0 +1,28 @@
+docs/adr/README.md
+  s_fb340f953812c6::t_eef0327a684a66 19
+docs/adr/0007-deny-rules-anchored-to-command-position.md
+  s_fb340f953812c6::t_11efd725329263 1-109
+CHANGELOG.md
+  s_fb340f953812c6::t_90666d6642572e 91-101
+  s_fb340f953812c6::t_35eae96556d6a9 132-133
+  s_fb340f953812c6::t_85a81591a0904a 10-23
+  s_fb340f953812c6::t_dec1f9690143fb 129-131
+internal/security/commandpolicy.go
+  s_fb340f953812c6::t_a5e9e6e4c7a0e5 73-75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "1dca80cc381ed99e0fd2b9ee38e55c9c0503b340",
+  "prompts": {},
+  "sessions": {
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    }
+  }
+}
