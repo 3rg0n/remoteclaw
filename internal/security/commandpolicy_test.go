@@ -381,6 +381,87 @@ func TestPolicyNarrowingKeepsExecutionBlocked(t *testing.T) {
 	}
 }
 
+// TestPolicyBlocksExecAfterEveryCommandPosition covers the shell constructs that
+// reach a command word without one of the obvious separators. The cmdPos anchor
+// regressed here: a separator set of `[;&|\n(]` alone let `{ exec sh; }` and
+// `if true; then exec sh; fi` through, because a brace group and the
+// compound-statement keywords are neither a separator nor a wrapper in that set.
+// Every entry below is a position where the next word is the command.
+func TestPolicyBlocksExecAfterEveryCommandPosition(t *testing.T) {
+	p := fullPolicy()
+
+	blocked := []string{
+		// Brace group — `{` opens a command list in the current shell.
+		"{ exec sh; }",
+		"{ exec sh ; }",
+		"true && { exec sh; }",
+		// Compound statements: a command word follows then/else/elif/do.
+		"if true; then exec sh; fi",
+		"if false; then true; else exec sh; fi",
+		"if false; then true; elif true; then exec sh; fi",
+		"for i in 1 2; do exec sh; done",
+		"while true; do exec sh; done",
+		"until false; do exec sh; done",
+		// Pipeline negation.
+		"! exec sh",
+		"if ! exec sh; then true; fi",
+		// A wrapper applied to a brace group.
+		"time { exec sh; }",
+		// Substitution in the same positions — the output becomes the command.
+		"{ $(echo rm) -rf /tmp/x; }",
+		"if true; then $(printf whoami); fi",
+		"for i in 1; do $(echo id); done",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			v := p.Check(cmd)
+			require.NotNil(t, v, "expected %q to be blocked", cmd)
+		})
+	}
+}
+
+// TestPolicyBlocksExactArgumentRulesBeforeTerminator pins the argEnd terminator.
+// The `rm -rf /` and `chmod 777 /` rules match an exact argument, and requiring
+// whitespace-or-end-of-string after it meant a shell metacharacter terminating
+// the word evaded them: `rm -rf /; echo done` deletes the root filesystem and
+// was not matched, because the `/` is followed by `;` rather than a space.
+func TestPolicyBlocksExactArgumentRulesBeforeTerminator(t *testing.T) {
+	p := fullPolicy()
+
+	blocked := []string{
+		"rm -rf /;",
+		"rm -rf /; echo done",
+		"rm -rf / && echo done",
+		"rm -rf /| tee log",
+		"rm -fr /;",
+		"{ rm -rf /; }",
+		"if true; then rm -rf /; fi",
+		"while true; do rm -rf /; done",
+		"(rm -rf /)",
+		"chmod 777 /;",
+		"chmod -R 777 /; echo done",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			v := p.Check(cmd)
+			require.NotNil(t, v, "expected %q to be blocked", cmd)
+		})
+	}
+
+	// The terminator must not over-match: a real path under root is not the
+	// root filesystem, and these must stay allowed.
+	allowed := []string{
+		"rm -rf /tmp/build",
+		"rm -rf /var/log/old;",
+		"chmod 777 /tmp/scratch",
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed/"+cmd, func(t *testing.T) {
+			assert.Nil(t, p.Check(cmd), "expected %q to be allowed", cmd)
+		})
+	}
+}
+
 func TestPolicyReasonDescriptive(t *testing.T) {
 	p := dangerousOnly()
 

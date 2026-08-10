@@ -60,10 +60,11 @@ func pattern(expr string) matcher {
 
 // cmdPos matches the position where a shell starts reading a command: the
 // beginning of the line, or immediately after a separator (`;`, `&&`, `||`, `|`,
-// newline) or an opening subshell paren — skipping any leading environment
-// assignments and command wrappers, which the shell allows before the command
-// word without changing which word that is. `FOO=1 exec sh` and `nohup exec sh`
-// are the same builtin as `exec sh`.
+// newline), an opening subshell paren, a brace-group delimiter, or a `case`
+// pattern's `)` — skipping any leading environment assignments, command
+// wrappers, pipeline negation, and compound-statement keywords, which the shell
+// allows before the command word without changing which word that is.
+// `FOO=1 exec sh` and `nohup exec sh` are the same builtin as `exec sh`.
 //
 // It exists because several signals are only meaningful in command position.
 // `exec` is a shell builtin there and a subcommand name anywhere else, so
@@ -71,14 +72,28 @@ func pattern(expr string) matcher {
 // there runs whatever the substitution prints, whereas `echo $(date)` merely
 // interpolates it into an argument.
 //
+// The separator and prefix sets must cover every way a shell reaches a command
+// word, not just the common ones: a set that omits `{` or `then` is evaded by
+// `{ exec sh; }` and `if true; then exec sh; fi`, which is how this rule
+// regressed once already. See TestPolicyBlocksExecAfterEveryCommandPosition.
+//
 // Removing the anchor to "harden" these rules is the wrong call, and ADR 0007
 // records why — make TestPolicyAllowsNarrowedExecAndSubstitution fail first.
-const cmdPos = `(?:^|[;&|\n(]\s*)` + cmdPrefix
+const cmdPos = `(?:^|[;&|\n({})]\s*)` + cmdPrefix
 
 // cmdPrefix is the run of tokens a shell skips before the command word: any
-// number of VAR=value assignments and wrappers that exec another command.
+// number of VAR=value assignments, wrappers that exec another command, the `!`
+// pipeline negation, and the compound-statement keywords after which a command
+// word follows (`if`, `elif`, `then`, `else`, `while`, `until`, `do`).
 const cmdPrefix = `(?:(?:[A-Za-z_]\w*=\S*|env|nohup|nice|ionice|time|stdbuf|` +
-	`setsid|command|builtin|xargs)\s+)*`
+	`setsid|command|builtin|xargs|if|elif|then|else|while|until|do|!)\s+)*`
+
+// argEnd matches the end of a command argument: whitespace, end of string, or a
+// shell metacharacter that terminates the word. Rules that pin an exact argument
+// (`rm -rf /`, `chmod 777 /`) need it so the argument cannot be extended into
+// something else — a bare `(\s|$)` misses the terminator forms, and
+// `rm -rf /; echo done` then goes unmatched because the `/` is followed by `;`.
+const argEnd = `(?:\s|[;&|)}<>]|$)`
 
 // substOpen matches the opening of a `$(…)` command substitution. Also matches
 // `$((` (arithmetic expansion, harmless) — accepted: over-matching arithmetic
@@ -225,10 +240,10 @@ func dangerousRules() []rule {
 
 	return []rule{
 		// Destructive filesystem operations — match flags in any order/combination.
-		d("recursive deletion of root filesystem", `rm\s+(-\w*r\w*\s+)*(-\w*f\w*\s+)*/(\s|$)`),
-		d("recursive deletion of root filesystem", `rm\s+(-\w*f\w*\s+)*(-\w*r\w*\s+)*/(\s|$)`),
-		d("recursive deletion of root filesystem", `rm\s+-r\s+-f\s+/(\s|$)`),
-		d("recursive deletion of root filesystem", `rm\s+-f\s+-r\s+/(\s|$)`),
+		d("recursive deletion of root filesystem", `rm\s+(-\w*r\w*\s+)*(-\w*f\w*\s+)*/`+argEnd),
+		d("recursive deletion of root filesystem", `rm\s+(-\w*f\w*\s+)*(-\w*r\w*\s+)*/`+argEnd),
+		d("recursive deletion of root filesystem", `rm\s+-r\s+-f\s+/`+argEnd),
+		d("recursive deletion of root filesystem", `rm\s+-f\s+-r\s+/`+argEnd),
 		d("recursive deletion of drive root", `del\s+/s\s+/q\s+[A-Za-z]:\\`),
 		d("formatting a drive", `format\s+[A-Za-z]:`),
 		d("creating a filesystem (destructive)", `mkfs\.`),
@@ -239,7 +254,7 @@ func dangerousRules() []rule {
 		d("fork bomb", `:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;?\s*:`),
 
 		// Dangerous permission changes.
-		d("recursive world-writable permissions on root", `chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+/(\s|$)`),
+		d("recursive world-writable permissions on root", `chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+/`+argEnd),
 		d("granting Everyone full access", `icacls\s+.*\s+/grant\s+Everyone:`),
 
 		// System shutdown/reboot.

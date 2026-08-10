@@ -47,6 +47,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   unrecognized value, or an empty one — requires an explicit allowlist entry. This
   predates the authorization rework, but that rework made this function the single
   gate for every connection mode, so its edge cases now matter everywhere.
+- **`rm -rf /;` was not blocked.** The four `rm` root-deletion rules and the
+  `chmod 777 /` rule required whitespace or end-of-string after the `/`, so any
+  shell metacharacter terminating the argument evaded them: `rm -rf /;` and
+  `rm -rf /; echo done` ran with no challenge prompt. This is **older than this
+  release** — the pattern came over verbatim from the pre-consolidation
+  `DangerousChecker` and had the same hole there, so it was a live gap in every
+  prior version. Rules that pin an exact argument now end it with `argEnd`
+  (whitespace, end of string, or a word-terminating metacharacter). Note that the
+  differential verification cited below could not have caught this: both engines
+  shared the hole, and a differential test only proves the new engine matches the
+  old one ([ADR 0008](docs/adr/0008-command-position-covers-every-shell-entry-point.md)).
+- **The command-position anchor missed brace groups and compound statements**, so
+  `{ exec sh; }`, `if true; then exec sh; fi`, `for i in 1; do exec sh; done`,
+  `while true; do exec sh; done`, and `! exec sh` reached the `exec` builtin
+  unblocked — the rule the anchor was supposed to place, not applied. The separator
+  set gains `{`/`}` and the prefix set gains `if`/`elif`/`then`/`else`/`while`/
+  `until`/`do` and `!`. All 22 false-positive cases from
+  [ADR 0007](docs/adr/0007-deny-rules-anchored-to-command-position.md) still pass —
+  `docker exec` and `echo $(date)` are still allowed — and two new tables pin the
+  enumeration of shell entry points itself
+  ([ADR 0008](docs/adr/0008-command-position-covers-every-shell-entry-point.md)).
+  Introduced by the narrowing earlier in this same release; never shipped.
 - **Fixed a lockdown bypass via challenge-response confirmation.** A secret-read
   command prefixed with a confirmable token — `sudo -E printenv OPENAI_API_KEY`,
   `sudo cat <config>`, `eval cat <config>`, `sudo pass show …` — was reported as
