@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **CI enforces the full quality gate: `gofmt`, `go vet`, `golangci-lint`, and
+  the race test.** Only the race test ran before, and only on a `v*` tag push —
+  so formatting and lint were manual conventions, and the drift this release
+  cleans up (see below) reached `master` unremarked. The gate now lives in one
+  reusable workflow (`.github/workflows/ci.yml`) that runs on push and pull
+  request and is *called* by `release.yml`, so the release path cannot run a
+  staler gate than a PR does. Steps are ordered cheapest-first. The format check
+  tests for empty output rather than an exit code, because `gofmt -l` exits 0
+  even when it names files — the trap that let a bare `gofmt -l` pass as a gate.
+  `golangci-lint` is pinned to v2.12.2 (matching `.golangci.yml`'s `version: "2"`)
+  rather than tracking `latest`, so a new upstream release cannot fail a build
+  with no commit to this repo.
+
 ### Security
 - **`webex.allowed_emails` is now enforced in `wmcp` mode.** Through v0.6.0 the
   allowlist was implemented inside `NativeMode` only, so in `wmcp` mode the
@@ -74,6 +88,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `getUsername()` resolves from the OS only. The `$USER`/`$USERNAME` fallbacks
   were caller-controlled and unset or wrong in exactly the contexts RemoteClaw
   runs in (systemd unit, LaunchAgent, Windows scheduled task).
+- **Line endings are normalized to LF via `.gitattributes`,** and the ten Go
+  files that had genuinely drifted are `gofmt`-clean. No behavior change; the
+  reason it is worth an entry is that the drift was *invisible*: with
+  `core.autocrlf=true` and no `.gitattributes`, a CRLF working tree against LF
+  storage made `gofmt -l` report 32 of 56 files, 22 of them pure line-ending
+  artifacts — so the 10 real ones were indistinguishable from noise and every
+  `gofmt` diff was unreadable. `*.ps1` stays CRLF, which is what PowerShell
+  expects. Contributors on Windows should re-materialize their working tree
+  (`git rm --cached -r . && git reset --hard`) to pick up the new attributes;
+  `git add --renormalize` is a no-op here, since the CRLF was only ever in the
+  working tree and never in storage.
 
 ### Fixed
 - **Tool calls now honor context cancellation.** Every executor handler took a
@@ -101,9 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   explicit: `find -exec`/`-execdir`, a substitution passed to an interpreter's
   eval flag (`-c`, `-e`, `-Command`, …), and a substitution or backtick computing
   an argument to a command whose arguments are the whole risk (`rm -rf $(echo /)`).
-  Verified differentially over an 82-command corpus: 25 false positives cleared,
-  40 execution paths still blocked including six prefix evasions the plain anchor
-  would have missed (`FOO=1 exec sh`, `nohup exec sh`).
+  Pinned by two committed tables in `commandpolicy_test.go`: 22 commands that the
+  broad rules refused and must now be allowed, and 32 execution paths that must
+  still be blocked — including six prefix evasions a plain anchor would have
+  missed (`FOO=1 exec sh`, `nohup exec sh`, `env exec sh`)
+  ([ADR 0007](docs/adr/0007-deny-rules-anchored-to-command-position.md)).
 - Secret-read matching no longer compiles regexps on every call. `Guard.IsSecretReadCommand`
   rebuilt its env-dump pattern per invocation; the rules are now pre-compiled once
   when the command policy is constructed.

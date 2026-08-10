@@ -70,6 +70,9 @@ func pattern(expr string) matcher {
 // matching it unanchored refuses `docker exec` and `kubectl exec`; a bare `$(…)`
 // there runs whatever the substitution prints, whereas `echo $(date)` merely
 // interpolates it into an argument.
+//
+// Removing the anchor to "harden" these rules is the wrong call, and ADR 0007
+// records why — make TestPolicyAllowsNarrowedExecAndSubstitution fail first.
 const cmdPos = `(?:^|[;&|\n(]\s*)` + cmdPrefix
 
 // cmdPrefix is the run of tokens a shell skips before the command word: any
