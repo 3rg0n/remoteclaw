@@ -49,7 +49,7 @@ func (cm *ConversationManager) GetHistory(key string) []ai.Message {
 	historyCopy := make([]ai.Message, len(history))
 	for i, msg := range history {
 		historyCopy[i] = ai.Message{
-			Role: msg.Role,
+			Role:    msg.Role,
 			Content: deepCopyContentBlocks(msg.Content),
 		}
 	}
@@ -66,7 +66,7 @@ func (cm *ConversationManager) UpdateHistory(key string, history []ai.Message) {
 	historyCopy := make([]ai.Message, len(history))
 	for i, msg := range history {
 		historyCopy[i] = ai.Message{
-			Role: msg.Role,
+			Role:    msg.Role,
 			Content: deepCopyContentBlocks(msg.Content),
 		}
 	}

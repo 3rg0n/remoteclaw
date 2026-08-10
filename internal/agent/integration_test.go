@@ -22,10 +22,10 @@ import (
 
 // CapturingMode is a mock Mode that captures sent messages
 type CapturingMode struct {
-	mu          sync.Mutex
-	handler     connect.MessageHandler
-	sentMsgs    []capturedMessage
-	connectErr  error
+	mu         sync.Mutex
+	handler    connect.MessageHandler
+	sentMsgs   []capturedMessage
+	connectErr error
 }
 
 type capturedMessage struct {

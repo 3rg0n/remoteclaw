@@ -290,7 +290,7 @@ func TestListDirBasic(t *testing.T) {
 	// Create some test files
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file1.txt"), []byte("content"), 0644)) //nolint:gosec // test file
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "file2.txt"), []byte("content"), 0644)) //nolint:gosec // test file
-	require.NoError(t, os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755))                            //nolint:gosec // test directory
+	require.NoError(t, os.Mkdir(filepath.Join(tmpDir, "subdir"), 0755))                           //nolint:gosec // test directory
 
 	result, err := exec.Execute(ctx, "list_dir", map[string]any{
 		"path": tmpDir,
@@ -311,7 +311,7 @@ func TestListDirRecursive(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	// Create nested structure
-	require.NoError(t, os.Mkdir(filepath.Join(tmpDir, "dir1"), 0755))                                   //nolint:gosec // test directory
+	require.NoError(t, os.Mkdir(filepath.Join(tmpDir, "dir1"), 0755))                                    //nolint:gosec // test directory
 	require.NoError(t, os.WriteFile(filepath.Join(tmpDir, "dir1", "file.txt"), []byte("content"), 0644)) //nolint:gosec // test file
 	require.NoError(t, os.Mkdir(filepath.Join(tmpDir, "dir2"), 0755))                                    //nolint:gosec // test directory
 

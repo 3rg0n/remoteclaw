@@ -115,4 +115,3 @@ func TestAllowlist_IsAllowedInRoom_EmptyRoomType(t *testing.T) {
 	allowlist := NewAllowlist(nil)
 	assert.True(t, allowlist.IsAllowedInRoom("anyone@example.com", ""))
 }
-

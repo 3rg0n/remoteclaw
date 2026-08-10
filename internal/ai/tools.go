@@ -86,9 +86,9 @@ func AllTools() []ToolDef {
 			Name:        "list_processes",
 			Description: "List all running processes on the system",
 			InputSchema: map[string]any{
-				"type": "object",
+				"type":       "object",
 				"properties": map[string]any{},
-				"required": []string{},
+				"required":   []string{},
 			},
 		},
 		{
@@ -109,9 +109,9 @@ func AllTools() []ToolDef {
 			Name:        "system_info",
 			Description: "Get information about the system",
 			InputSchema: map[string]any{
-				"type": "object",
+				"type":       "object",
 				"properties": map[string]any{},
-				"required": []string{},
+				"required":   []string{},
 			},
 		},
 	}

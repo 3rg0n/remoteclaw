@@ -50,7 +50,7 @@ type ChallengeStore struct {
 	mu         sync.Mutex
 	pending    map[string]*PendingChallenge // keyed by spaceID
 	attempts   map[string]int               // failed attempt count per spaceID
-	stopCh     chan struct{}                 // signals cleanup goroutine to stop
+	stopCh     chan struct{}                // signals cleanup goroutine to stop
 }
 
 // NewChallengeStore creates a challenge store with the given encrypted challenge value.

@@ -35,12 +35,12 @@ type Processor struct {
 
 // ProcessorConfig holds configuration for creating a Processor
 type ProcessorConfig struct {
-	Converser    Converser
-	SystemPrompt string
-	Tools        []ToolDef
-	MaxTokens    int
+	Converser     Converser
+	SystemPrompt  string
+	Tools         []ToolDef
+	MaxTokens     int
 	MaxIterations int
-	ExecuteTool  func(ctx context.Context, toolName string, params map[string]any) (string, error)
+	ExecuteTool   func(ctx context.Context, toolName string, params map[string]any) (string, error)
 }
 
 // NewProcessor creates a new AI processor
@@ -219,4 +219,3 @@ func extractText(content []ContentBlock) string {
 	}
 	return text
 }
-

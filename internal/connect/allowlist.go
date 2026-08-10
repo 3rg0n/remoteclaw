@@ -62,4 +62,3 @@ func (a *Allowlist) IsAllowedInRoom(email string, roomType string) bool {
 	normalizedEmail := strings.ToLower(strings.TrimSpace(email))
 	return a.emails[normalizedEmail]
 }
-
