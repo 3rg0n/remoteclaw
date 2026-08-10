@@ -446,15 +446,28 @@ Remove-Item "C:\ProgramData\remoteclaw" -Recurse -Force
 # Build
 go build ./cmd/remoteclaw/
 
-# Run all tests with race detector
-go test -race -count=1 ./...
+# Format (CI fails if any file is not gofmt-clean)
+make fmt
+
+# Vet
+go vet ./...
 
 # Lint
 golangci-lint run ./...
 
+# Run all tests with race detector
+go test -race -count=1 ./...
+
 # Run a single test
 go test -run TestIntegration_ChallengeResponse ./internal/agent/
 ```
+
+CI runs exactly these four gates — `gofmt`, `go vet`, `golangci-lint`, and the
+race test — on every push and pull request, and the release workflow calls the
+same job, so a tag cannot ship on a staler gate than a PR. Run them locally
+before pushing. Line endings are normalized to LF by `.gitattributes` (`*.ps1`
+stays CRLF); on Windows, if `gofmt -l` reports files you have not touched,
+re-materialize your working tree with `git rm --cached -r . && git reset --hard`.
 
 ## License
 

@@ -1,0 +1,56 @@
+# The quality gate: format, vet, lint, test.
+#
+# Defined here rather than inline in release.yml so there is exactly one copy.
+# release.yml calls this job via `uses:`, so a gate added here is a gate the
+# release path runs too — two inline copies would drift, and the release copy
+# would be the one nobody notices is stale.
+name: CI
+
+on:
+  push:
+    # Tag pushes are covered by release.yml, which calls this workflow. Listing
+    # branches keeps a tag from running the same gate twice.
+    branches:
+      - master
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+
+      # Ordered cheapest-first so the fastest check reports the failure.
+      #
+      # `gofmt -l` exits 0 even when it lists files, so it cannot gate on its
+      # own exit status — hence the explicit emptiness test. The listing is
+      # printed before failing, since "something is misformatted" is not
+      # actionable on its own.
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::These files are not gofmt-clean. Run 'make fmt'."
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - run: go vet ./...
+
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          # Pinned rather than "latest": a new release adds checks, and a lint
+          # gate that can start failing without a commit to this repo is a gate
+          # that gets disabled. Bump deliberately. Must stay on v2.x to match
+          # .golangci.yml's `version: "2"` schema.
+          version: v2.12.2
+          args: ./...
+
+      - run: go test -race -count=1 ./...
