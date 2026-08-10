@@ -63,9 +63,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `while true; do exec sh; done`, and `! exec sh` reached the `exec` builtin
   unblocked — the rule the anchor was supposed to place, not applied. The separator
   set gains `{`/`}` and the prefix set gains `if`/`elif`/`then`/`else`/`while`/
-  `until`/`do` and `!`. All 22 false-positive cases from
+  `until`/`do` and `!`. The brace-group opener counts only when followed by
+  whitespace, and a closing `}` is not a command position at all — folding both
+  into the separator class instead makes `}` match the end of a `${VAR}` expansion
+  and refuses `docker ${FLAGS} exec web sh`, trading the under-match for exactly
+  the false positives the anchor exists to avoid. All 22 false-positive cases from
   [ADR 0007](docs/adr/0007-deny-rules-anchored-to-command-position.md) still pass —
-  `docker exec` and `echo $(date)` are still allowed — and two new tables pin the
+  `docker exec` and `echo $(date)` are still allowed — and three new tables pin the
   enumeration of shell entry points itself
   ([ADR 0008](docs/adr/0008-command-position-covers-every-shell-entry-point.md)).
   Introduced by the narrowing earlier in this same release; never shipped.

@@ -420,6 +420,41 @@ func TestPolicyBlocksExecAfterEveryCommandPosition(t *testing.T) {
 	}
 }
 
+// TestPolicyBraceExpansionIsNotCommandPosition is the counterweight to the test
+// above. Widening the anchor to cover brace groups is one character away from
+// matching brace *expansion* and `${VAR}` expansion, which appear mid-argument in
+// completely ordinary commands. The first attempt at that widening added `{` and
+// `}` to the separator set and refused `docker ${FLAGS} exec web sh`, which is
+// precisely the false-positive class ADR 0007 exists to prevent.
+//
+// The distinction the anchor relies on is a shell rule, not a heuristic: a brace
+// group requires whitespace after `{` (`{echo a;}` is not valid), and expansion
+// never has it. A closing `}` is not a command position at all, because a command
+// word cannot follow one directly.
+func TestPolicyBraceExpansionIsNotCommandPosition(t *testing.T) {
+	p := fullPolicy()
+
+	allowed := []string{
+		// ${VAR} expansion before a word that merely contains a signal.
+		"docker ${FLAGS} exec web sh",
+		"kubectl ${OPTS} exec -it pod/api -- ls",
+		"echo ${HOME} exec",
+		"echo ${A} $(date)",
+		"tar -cf ${NAME}.tar exec/",
+		"echo ${PATH}",
+		"rm -rf ${TMPDIR}/build",
+		// Brace expansion — no whitespace after `{`, so not a group.
+		"cp file{a,b} exec",
+		"tar --exclude={exec,build} -cf out.tar .",
+		"mkdir -p /tmp/{a,b}",
+	}
+	for _, cmd := range allowed {
+		t.Run(cmd, func(t *testing.T) {
+			assert.Nil(t, p.Check(cmd), "expected %q to be allowed", cmd)
+		})
+	}
+}
+
 // TestPolicyBlocksExactArgumentRulesBeforeTerminator pins the argEnd terminator.
 // The `rm -rf /` and `chmod 777 /` rules match an exact argument, and requiring
 // whitespace-or-end-of-string after it meant a shell metacharacter terminating

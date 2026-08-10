@@ -59,8 +59,10 @@ adversary picks the input.
 **A positional anchor is only as good as its enumeration of shell entry points, so
 enumerate them explicitly and test the enumeration, not just the rule.**
 
-- `cmdPos` separators gain `{`, `}` — brace-group delimiters:
-  `(?:^|[;&|\n({})]\s*)`.
+- `cmdPos` gains the brace-group opener as a separate alternative:
+  `(?:^|[;&|\n(]\s*|\{\s+)`. The `{` counts **only when followed by
+  whitespace**, and the closing `}` is not a command position at all. Both
+  restrictions are load-bearing — see the brace-expansion consequence below.
 - `cmdPrefix` gains the compound-statement keywords after which a command word
   follows (`if`, `elif`, `then`, `else`, `while`, `until`, `do`) and the `!`
   pipeline negation. These belong in the prefix set rather than the separator set
@@ -83,19 +85,48 @@ It does — all 22 cases, including `docker exec`, `kubectl exec`, `echo $(date)
 followed by a command word by definition, so they cannot introduce a match in
 argument position.
 
-**Two new committed tables pin the enumeration itself**, which is the durable part
-of this change:
+**Widening the anchor immediately re-broke what ADR 0007 protects, and the fix for
+that is the most delicate part of this change.** The first attempt put `{` and `}`
+in the separator set. `}` then matched the end of a `${VAR}` expansion, and the
+policy refused:
+
+```
+docker ${FLAGS} exec web sh        kubectl ${OPTS} exec -it pod/api -- ls
+echo ${A} $(date)                  cp file{a,b} exec
+```
+
+That is exactly the false-positive class ADR 0007 exists to prevent, produced by
+the fix for the under-match. Both restrictions in the Decision are what resolve
+it, and both are shell rules rather than heuristics:
+
+- A closing `}` cannot be followed by a command word — `{ echo a; } echo b` is a
+  syntax error — so a real command after a brace group always arrives via a
+  separator already covered. `}` buys no coverage and costs the expansion match.
+- A brace *group* requires whitespace after `{`; brace *expansion* never has it
+  (`{echo a;}` is not a valid group). Requiring `\{\s+` separates
+  `{ exec sh; }` from `--exclude={exec,build}` and `cp file{a,b}` exactly.
+
+The general lesson: an anchor fix has two failure directions, and fixing the
+under-match without re-testing the over-match trades one defect for the other.
+
+**Three new committed tables pin the enumeration itself**, which is the durable
+part of this change:
 
 - `TestPolicyBlocksExecAfterEveryCommandPosition` — 16 cases covering brace
   groups, `if`/`then`/`else`/`elif`, `for`/`while`/`until` + `do`, `!` negation, a
   wrapper applied to a brace group, and substitution in those same positions.
+- `TestPolicyBraceExpansionIsNotCommandPosition` — the counterweight: 10 allow
+  cases covering `${VAR}` expansion before a signal word and brace expansion
+  without whitespace. This is the table that fails if someone "simplifies" the
+  anchor by folding `{`/`}` into the separator character class.
 - `TestPolicyBlocksExactArgumentRulesBeforeTerminator` — 11 block cases for
   terminator forms after `rm -rf /` and `chmod 777 /`, plus 3 allow cases
   (`rm -rf /tmp/build`, `rm -rf /var/log/old;`, `chmod 777 /tmp/scratch`) so the
   terminator cannot be "fixed" by dropping the anchor on the path.
 
-Verified by negative control: reverting both fixes fails 24 subtests across the
-two new tables, and no others.
+Verified by negative control in both directions: reverting the two under-match
+fixes fails 24 subtests across the first and third tables; reverting to the
+`[;&|\n({})]` separator set fails 6 subtests in the second and no others.
 
 **The `rm -rf /;` hole was a live gap in a shipped release, not a regression from
 this cycle.** It predates the consolidation. It is recorded here rather than

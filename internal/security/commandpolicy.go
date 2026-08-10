@@ -60,11 +60,11 @@ func pattern(expr string) matcher {
 
 // cmdPos matches the position where a shell starts reading a command: the
 // beginning of the line, or immediately after a separator (`;`, `&&`, `||`, `|`,
-// newline), an opening subshell paren, a brace-group delimiter, or a `case`
-// pattern's `)` — skipping any leading environment assignments, command
-// wrappers, pipeline negation, and compound-statement keywords, which the shell
-// allows before the command word without changing which word that is.
-// `FOO=1 exec sh` and `nohup exec sh` are the same builtin as `exec sh`.
+// newline), an opening subshell paren, or an opening brace group — skipping any
+// leading environment assignments, command wrappers, pipeline negation, and
+// compound-statement keywords, which the shell allows before the command word
+// without changing which word that is. `FOO=1 exec sh` and `nohup exec sh` are
+// the same builtin as `exec sh`.
 //
 // It exists because several signals are only meaningful in command position.
 // `exec` is a shell builtin there and a subcommand name anywhere else, so
@@ -77,9 +77,23 @@ func pattern(expr string) matcher {
 // `{ exec sh; }` and `if true; then exec sh; fi`, which is how this rule
 // regressed once already. See TestPolicyBlocksExecAfterEveryCommandPosition.
 //
+// Two brace forms are deliberately excluded, because including them reintroduces
+// the false positives ADR 0007 exists to prevent:
+//
+//   - A closing `}` is not a separator. A command word cannot follow one
+//     directly (`{ echo a; } echo b` is a syntax error), so a real command after
+//     a brace group always arrives via `;`/`&&`/`|`/newline. Treating `}` as one
+//     matched the end of a `${VAR}` expansion and refused
+//     `docker ${FLAGS} exec web sh`.
+//   - An opening `{` counts only when *followed by whitespace*, which is what
+//     distinguishes a brace group from brace expansion: `{ exec sh; }` is a
+//     group and requires the space, while `--exclude={exec,foo}` and
+//     `cp file{a,b}` never have it. This is a shell rule, not a heuristic —
+//     `{echo a;}` is not a valid group.
+//
 // Removing the anchor to "harden" these rules is the wrong call, and ADR 0007
 // records why — make TestPolicyAllowsNarrowedExecAndSubstitution fail first.
-const cmdPos = `(?:^|[;&|\n({})]\s*)` + cmdPrefix
+const cmdPos = `(?:^|[;&|\n(]\s*|\{\s+)` + cmdPrefix
 
 // cmdPrefix is the run of tokens a shell skips before the command word: any
 // number of VAR=value assignments, wrappers that exec another command, the `!`
