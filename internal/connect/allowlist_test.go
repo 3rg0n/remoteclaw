@@ -110,8 +110,31 @@ func TestAllowlist_IsAllowedInRoom_DirectPopulated(t *testing.T) {
 	assert.False(t, allowlist.IsAllowedInRoom("bob@example.com", "direct"))
 }
 
-func TestAllowlist_IsAllowedInRoom_EmptyRoomType(t *testing.T) {
-	// Empty room type should behave like direct (legacy/1:1)
-	allowlist := NewAllowlist(nil)
-	assert.True(t, allowlist.IsAllowedInRoom("anyone@example.com", ""))
+// TestAllowlist_IsAllowedInRoom_UnknownRoomTypeFailsClosed pins the fail-closed
+// direction for a room type we could not determine. The upstream handler infers
+// it from Mercury activity tags and returns "" when they are absent or
+// unrecognized, so this is a reachable input, not a theoretical one. Treating it
+// as direct would let an untagged group room with an empty allowlist authorize
+// every sender in it.
+func TestAllowlist_IsAllowedInRoom_UnknownRoomTypeFailsClosed(t *testing.T) {
+	empty := NewAllowlist(nil)
+	for _, roomType := range []string{"", "group", "team", "GROUP", "unknown"} {
+		t.Run("empty_list/"+roomType, func(t *testing.T) {
+			assert.False(t, empty.IsAllowedInRoom("anyone@example.com", roomType),
+				"an empty allowlist must not authorize a non-direct space")
+		})
+	}
+
+	// With a populated list the sender is still authorized by explicit entry, so
+	// failing closed on an unknown type does not break a configured deployment.
+	populated := NewAllowlist([]string{"alice@example.com"})
+	for _, roomType := range []string{"", "group", "unknown"} {
+		t.Run("populated/"+roomType, func(t *testing.T) {
+			assert.True(t, populated.IsAllowedInRoom("alice@example.com", roomType))
+			assert.False(t, populated.IsAllowedInRoom("bob@example.com", roomType))
+		})
+	}
+
+	// "direct" remains the one permissive case, and only when the list is empty.
+	assert.True(t, empty.IsAllowedInRoom("anyone@example.com", "direct"))
 }

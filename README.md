@@ -332,7 +332,12 @@ webex:
 - **Empty list + group room**: No one can use the bot (strict enforcement in rooms)
 - **Empty list + wmcp relay**: No one can use the bot — relayed senders are treated
   as group-room senders, since a relay cannot prove a message came from a 1:1 space
+- **Empty list + space we cannot classify**: No one can use the bot. Only a space
+  positively identified as 1:1 gets the permissive reading; anything else is denied
 - **Populated list**: Only listed emails can interact, in any space type or mode
+
+Leaving `allowed_emails` empty is only safe if you also accept that anyone who can
+open a 1:1 space with your bot can run commands on the host. Set it.
 
 ### Audit Logging
 

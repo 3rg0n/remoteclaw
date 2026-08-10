@@ -330,6 +330,7 @@ func TestMessageHandlerProcessing(t *testing.T) {
 		PersonID: "person-1",
 		Email:    "user@example.com",
 		Text:     "list processes",
+		RoomType: "direct",
 	}
 
 	// Call the message handler
@@ -404,6 +405,7 @@ func TestMessageHandlerError(t *testing.T) {
 		PersonID: "person-1",
 		Email:    "user@example.com",
 		Text:     "test",
+		RoomType: "direct",
 	}
 
 	// This should not panic even though converser fails
@@ -449,9 +451,10 @@ func TestPassthroughExecutesCommand(t *testing.T) {
 
 	// A portable, harmless command. "echo" exists on both sh and PowerShell.
 	msg := connect.IncomingMessage{
-		SpaceID: "space-1",
-		Email:   "user@example.com",
-		Text:    "echo passthrough_ok",
+		SpaceID:  "space-1",
+		Email:    "user@example.com",
+		Text:     "echo passthrough_ok",
+		RoomType: "direct",
 	}
 	agent.messageHandler(context.Background(), msg)
 
@@ -472,9 +475,10 @@ func TestPassthroughBlocksDangerousCommand(t *testing.T) {
 	defer agent.challengeStore.Close()
 
 	msg := connect.IncomingMessage{
-		SpaceID: "space-1",
-		Email:   "user@example.com",
-		Text:    "rm -rf /",
+		SpaceID:  "space-1",
+		Email:    "user@example.com",
+		Text:     "rm -rf /",
+		RoomType: "direct",
 	}
 	agent.messageHandler(context.Background(), msg)
 
@@ -496,9 +500,10 @@ func TestPassthroughDangerousCommandPromptsChallenge(t *testing.T) {
 	defer agent.challengeStore.Close()
 
 	msg := connect.IncomingMessage{
-		SpaceID: "space-1",
-		Email:   "user@example.com",
-		Text:    "rm -rf /",
+		SpaceID:  "space-1",
+		Email:    "user@example.com",
+		Text:     "rm -rf /",
+		RoomType: "direct",
 	}
 	agent.messageHandler(context.Background(), msg)
 
@@ -536,9 +541,10 @@ func TestPassthroughSecretReadGetsNoChallengePrompt(t *testing.T) {
 	// "sudo cat <protected>" matches privilege escalation (confirmable) as well
 	// as a protected-path read (hard). The hard denial must win.
 	msg := connect.IncomingMessage{
-		SpaceID: "space-1",
-		Email:   "user@example.com",
-		Text:    "sudo cat " + protected,
+		SpaceID:  "space-1",
+		Email:    "user@example.com",
+		Text:     "sudo cat " + protected,
+		RoomType: "direct",
 	}
 	agent.messageHandler(context.Background(), msg)
 
@@ -581,7 +587,14 @@ func TestAuthorizeChokePoint(t *testing.T) {
 		{"direct unlisted denied when list populated", []string{"alice@example.com"}, "eve@evil.com", "direct", false},
 		{"direct listed allowed", []string{"alice@example.com"}, "alice@example.com", "direct", true},
 		{"direct empty allowlist allows all", nil, "anyone@example.com", "direct", true},
-		{"empty roomType treated as direct", nil, "anyone@example.com", "", true},
+		// An undeterminable room type fails closed. The upstream Webex handler
+		// infers the type from Mercury activity tags and returns "" when they are
+		// absent or unrecognized, so this is reachable; treating it as direct
+		// would let an untagged group room with an empty allowlist authorize
+		// everyone in it.
+		{"unknown roomType denied when list empty", nil, "anyone@example.com", "", false},
+		{"unknown roomType allows listed sender", []string{"alice@example.com"}, "alice@example.com", "", true},
+		{"unknown roomType denies unlisted sender", []string{"alice@example.com"}, "eve@evil.com", "", false},
 	}
 
 	for _, tt := range tests {

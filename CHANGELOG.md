@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `allowed_emails` now denies everyone instead of allowing everyone. List the
   emails you want to authorize. If you ran `wmcp` mode on ≤ v0.6.0, review your
   audit log.
+- **Fixed a fail-open in the allowlist for spaces whose room type could not be
+  determined.** `IsAllowedInRoom` took the permissive 1:1 branch for any room type
+  that was not exactly `"group"`, and the upstream Webex handler infers the type
+  from Mercury activity tags and returns `""` when they are absent or
+  unrecognized. So a group room whose activity arrived untagged, with an empty
+  `allowed_emails`, authorized every sender in it — the documented "empty list +
+  group room → deny everyone" rule silently did not hold. The permissive branch
+  now requires a positive `"direct"`, and everything else — `"group"`, an
+  unrecognized value, or an empty one — requires an explicit allowlist entry. This
+  predates the authorization rework, but that rework made this function the single
+  gate for every connection mode, so its edge cases now matter everywhere.
 - **Fixed a lockdown bypass via challenge-response confirmation.** A secret-read
   command prefixed with a confirmable token — `sudo -E printenv OPENAI_API_KEY`,
   `sudo cat <config>`, `eval cat <config>`, `sudo pass show …` — was reported as

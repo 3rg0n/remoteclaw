@@ -76,8 +76,10 @@ This is a remote-code-execution tool by design, so the security layers are the p
 
 `allowed_emails` matching is case-insensitive and behaves differently by room type (`connect.Allowlist`):
 - Empty list + **direct** message → allow anyone.
-- Empty list + **group** room → deny everyone (strict).
+- Empty list + **anything else** → deny everyone (strict).
 - Populated list → only listed emails, in any room type.
+
+`IsAllowedInRoom` tests `roomType == "direct"` for the permissive branch rather than excluding `"group"`, and inverting that is a fail-open. The upstream Webex handler infers the room type from Mercury activity tags and returns `""` when they're absent or unrecognized, so an unknown type is reachable — treating it as direct would let an untagged group room with an empty allowlist authorize everyone in it.
 
 **Authorization is a single choke point, not a Mode concern.** `Agent.authorize` is called at the top of `messageHandler` — before the rate limiter, challenge store, or executor — so every `connect.Mode` is gated identically and a new Mode cannot ship without authz. `Mode` implementations carry no allowlist; their contract is to report provenance honestly (`Email`, `RoomType`). `WMCPMode` therefore reports `RoomType: "group"`, the strict setting, because the relay envelope has no room-type field and a relay cannot prove a 1:1 space. A nil allowlist denies. See [ADR 0005](docs/adr/0005-single-authorization-choke-point.md).
 
