@@ -1,0 +1,29 @@
+docs/adr/0009-deny-rules-match-the-operand-not-the-flags.md
+  s_fb340f953812c6::t_59b561324b255f 1-129
+internal/security/commandpolicy.go
+  s_fb340f953812c6::t_0fa7127b7ee0ed 95,99-104
+  s_fb340f953812c6::t_bc01a760b216ef 94,96-98,107,111-117,126-143,288-291,301-305
+  s_fb340f953812c6::t_01974c1113c94d 63-67
+CHANGELOG.md
+  s_fb340f953812c6::t_72b414e2de2cfe 50-75
+internal/security/commandpolicy_test.go
+  s_fb340f953812c6::t_823f8f393a30fc 500-612
+docs/adr/README.md
+  s_fb340f953812c6::t_1e5a1c8d11778e 21
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "66eabd83db257166a078f23dd821c3a7e2f62eca",
+  "prompts": {},
+  "sessions": {
+    "s_fb340f953812c6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "efdbbad4-7674-416b-b149-e96e58a3e9fe",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Ergon Copeland <3rg0n@users.noreply.github.com>"
+    }
+  }
+}
