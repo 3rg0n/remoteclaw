@@ -564,6 +564,66 @@ func TestPolicyBlocksEveryRootTargetSpelling(t *testing.T) {
 	}
 }
 
+// TestPolicyBlocksRootTargetAtAnyOperandPosition covers the operand *list*. These
+// commands take any number of operands and act on every one of them, so a rule
+// that only looks at the first sees `backup` in `rm -rf backup /*` and allows a
+// command that deletes the working copy and then the whole filesystem. Verified
+// with coreutils: `rm -rf a b` removes both, and `rm -rf x /` processes `x` before
+// the failsafe rejects `/`.
+func TestPolicyBlocksRootTargetAtAnyOperandPosition(t *testing.T) {
+	p := fullPolicy()
+
+	blocked := []string{
+		"rm -rf backup /*",
+		"rm -rf a b /*",
+		"rm -rf /var/tmp/x /*",
+		"rm -rf ./x /*",
+		"rm backup /",
+		"rm -rf backup /.",
+		`rm -rf backup "/"`,
+		"chmod -R 777 /srv /*",
+		"chmod 777 file /",
+		"chown -R app /srv /*",
+		"chgrp -R www /",
+		"chgrp staff /*",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			v := p.Check(cmd)
+			require.NotNil(t, v, "expected %q to be blocked", cmd)
+			assert.Equal(t, DispositionChallenge, v.Disposition)
+		})
+	}
+
+	// Skipping earlier operands is the widest thing these rules do, so the allow
+	// half is the real test: a multi-operand command with no root target — however
+	// many absolute paths it names — must stay allowed. This holds only because
+	// rootTarget is anchored by argEnd; the `/` of `/var/log/old` is followed by
+	// `v`, not a terminator.
+	allowed := []string{
+		"rm -rf /tmp/a /tmp/b",
+		"rm -rf build dist",
+		"rm -f /var/run/app.pid /var/run/app.sock",
+		"rm -rf node_modules /tmp/build",
+		"rm /tmp/one.txt /tmp/two.txt",
+		"rm -rf ./build ../sibling/dist",
+		"rm -- /tmp/weird-file",
+		"chmod -R 755 /usr/local/bin /opt/app/bin",
+		"chown app:app /var/www/html /var/www/logs",
+		"chown --reference=/etc/passwd /tmp/x",
+		"chown 1000:1000 /data/vol",
+		"chgrp -R devs /srv/repo",
+		"chmod 644 /etc/nginx/nginx.conf",
+		"rm -rf /opt/app/releases/*",
+		"chmod -R 777 /var/www/*",
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed/"+cmd, func(t *testing.T) {
+			assert.Nil(t, p.Check(cmd), "expected %q to be allowed", cmd)
+		})
+	}
+}
+
 // TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick covers two more command
 // positions found after ADR 0008: a redirection may precede the command word, and
 // a backtick opens a substitution whose contents execute. Both were allowed.

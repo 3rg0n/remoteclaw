@@ -60,6 +60,11 @@ The flag half was fragile for a related reason: four rules enumerated
 `-r`-then-`-f` and `-f`-then-`-r`, so `rm -r --verbose -f /` and
 `rm --recursive --force /` fell between the cases.
 
+The operand half was fragile in a third way, found while verifying the fix for
+the first two: these commands take an operand *list* and act on every element of
+it, so a rule that inspects only the first operand allows
+`rm -rf backup /*` — valid shell, destroys the filesystem.
+
 Two command positions also remained uncovered after ADR 0008 — a leading
 redirection (`2>/dev/null exec sh`) and a backtick substitution
 (``echo `exec sh` ``).
@@ -70,14 +75,18 @@ redirection (`2>/dev/null exec sh`) and a backtick substitution
 toward, and treats the flags as noise.** Enumerating flags is a losing game;
 enumerating the ways a shell can name the filesystem root is a bounded one.
 
-- `flagRun` — `(?:-{1,2}[\w-]*\s+)*` — replaces every hand-enumerated flag
-  sequence. Any options, any order, or none: `rm /` is as worth confirming as
-  `rm -rf /`.
+- `operandRun` — `(?:(?:-{1,2}[\w-]*|[^\s;&|<>()][^\s;&|<>()]*)\s+)*` — the words
+  a rule skips to reach the operand it cares about: any option words, and any
+  *earlier operands*. The second half matters because these commands take a
+  **list** and act on every element: `rm -rf backup /*` deletes the working copy
+  and then everything in the root directory, and a rule that inspects only the
+  first operand sees `backup` and allows it. Verified with coreutils that
+  `rm -rf a b` removes both.
 - `rootTarget` — `(?:/(?:\*|\.{1,2})?|"/"?\*?|'/'?\*?)` — enumerates the operand
   forms that mean the filesystem root: bare, globbed, dot forms, and quoted.
-- The four `rm` rules collapse into one (`\brm\s+` + `flagRun` + `rootTarget`),
-  and `chmod 777` gains the same shape. `chown` on root is added, which the
-  former rules did not cover in any form.
+- The four `rm` rules collapse into one (`\brm\s+` + `operandRun` + `rootTarget` +
+  `argEnd`), and `chmod 777` gains the same shape. `chown` and `chgrp` on root are
+  added, which the former rules did not cover in any form.
 - `cmdPrefix` gains leading redirections (`\d*[<>]{1,2}\S*`) and `coproc`;
   `cmdPos` gains the backtick as a separator.
 
@@ -86,11 +95,30 @@ operator who owns the machine may wipe it — the control is proof of intent.
 
 ## Consequences
 
-**Four rules became one and covered strictly more.** Enumerating flag orderings
-is what made the old rules both verbose and evadable, and the collapse is
-verified by the pre-existing table: reverting `flagRun` to the old
-`-r`-then-`-f` pattern fails `TestPolicyBlocksDestructiveCommands/rm_separate_flags_reversed`,
-a case that predates this change.
+**Four rules became one and covered strictly more — verified differentially, not
+argued.** "Strictly more" is the kind of claim that is easy to assert and easy to
+get wrong, so both former patterns were reconstructed and compared against the
+replacement over a mechanically generated corpus of 29,250 `rm`/`chmod`
+invocations (flag words × target spellings × command-position prefixes ×
+trailing separators × leading operands). **Zero inputs matched by the old rules
+are allowed by the new one.** The collapse is also pinned by the pre-existing
+table: reverting to the old `-r`-then-`-f` pattern fails
+`TestPolicyBlocksDestructiveCommands/rm_separate_flags_reversed`, a case that
+predates this change.
+
+**The operand-list gap was found while verifying the collapse, not before it.**
+The first version of this fix skipped flags only, and `rm -rf backup /*` — valid
+shell, destroys the filesystem — was allowed. That is the same defect as the
+original, one level out: the first version asked "what flags can precede the
+operand" when it should have asked "which operand is the target." A rule about a
+command that takes a list has to consider the whole list.
+
+The widening this required is the largest in the file, so its allow half is the
+load-bearing test: a multi-operand command naming any number of absolute paths
+must stay allowed. That holds only because `rootTarget` is followed by `argEnd` —
+the `/` of `/var/log/old` is followed by `v`, not a terminator, so an ordinary
+absolute path cannot satisfy the target. Removing that `argEnd` turns this into a
+rule that refuses every absolute path.
 
 **One position stays knowingly uncovered: a `case` branch.**
 `case x in y) exec sh;; esac` reaches the builtin and is not matched. Covering it
@@ -102,17 +130,20 @@ buys one obscure position at the cost of a common false positive. An operator
 who writes a `case` statement to smuggle `exec` past a deny-list is well past
 what an in-process pattern matcher is claimed to stop (ADR 0004).
 
-**Two new tables, and both directions controlled.**
-`TestPolicyBlocksEveryRootTargetSpelling` carries 19 block cases and 10 allow
-cases — the allow half matters as much, since widening an operand pattern is one
-mistake away from refusing `rm -rf /tmp/build`.
-`TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick` carries 10 block and 6
-allow. Negative controls were run per-change rather than in aggregate, so each
-piece is pinned by tests that fail without it and only on the intended inputs:
-reverting `rootTarget` fails 12 subtests; `flagRun`, 6; the redirection prefix,
-7; the backtick, 1. A 39-command over-match probe (absolute paths, redirection in
-ordinary position, `coproc`/backticks in argument position, routine sysadmin
-commands) produced no false positives.
+**Three new tables, and both directions controlled.**
+`TestPolicyBlocksEveryRootTargetSpelling` carries 19 block and 10 allow cases;
+`TestPolicyBlocksRootTargetAtAnyOperandPosition`, 12 block and 15 allow;
+`TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick`, 10 block and 6 allow.
+The allow halves matter as much as the block halves, since widening an operand
+pattern is one mistake away from refusing `rm -rf /tmp/build`.
+
+Negative controls were run per-change rather than in aggregate, so each piece is
+pinned by tests that fail without it and only on the intended inputs: reverting
+`rootTarget` fails 12 subtests; the flag-run half of `operandRun`, 6; the
+earlier-operand half, 14; the redirection prefix, 7; the backtick, 1. Two
+over-match probes (39 and 21 commands: absolute paths, multi-operand commands,
+redirection in ordinary position, `coproc`/backticks in argument position,
+routine sysadmin commands) produced no false positives.
 
 **The lesson ADR 0008 drew, restated with evidence for the operand side.** ADR
 0008 said an anchor fix has two failure directions. This adds: **a rule can be

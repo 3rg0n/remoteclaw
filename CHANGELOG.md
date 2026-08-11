@@ -59,10 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   the dangerous ones. **This was live in every released version** — `git log -S`
   finds no glob form anywhere in the history of `internal/security/`. Rules now
   match the *operand* (`rootTarget`: bare, globbed, dot, and quoted forms) and
-  treat flags as noise (`flagRun`), which also closes `rm -r --verbose -f /` and
-  `rm --recursive --force /` — the four flag-ordered `rm` rules enumerated
-  `-r`-then-`-f` and `-f`-then-`-r` and nothing in between. The four collapse into
-  one rule covering strictly more, and `chown` on root is now covered at all
+  skip over flags and earlier operands to find it (`operandRun`), which also closes
+  `rm -r --verbose -f /` and `rm --recursive --force /` — the four flag-ordered
+  `rm` rules enumerated `-r`-then-`-f` and `-f`-then-`-r` and nothing in between —
+  and `rm -rf backup /*`, where the root target is not the first operand and these
+  commands act on every operand they are given. The four rules collapse into one
+  covering strictly more, verified differentially against both former patterns over
+  29,250 generated invocations (zero inputs lost). `chown` and `chgrp` on root are
+  now covered at all
   ([ADR 0009](docs/adr/0009-deny-rules-match-the-operand-not-the-flags.md)).
 - **Two more command positions reached the `exec` builtin unblocked**: a leading
   redirection (`>out exec sh`, `2>/dev/null exec sh`) and a backtick substitution

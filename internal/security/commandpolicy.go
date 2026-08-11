@@ -123,13 +123,29 @@ const cmdPrefix = `(?:(?:[A-Za-z_]\w*=\S*|\d*[<>]{1,2}\S*|env|nohup|nice|ionice|
 // `rm -rf /; echo done` then goes unmatched because the `/` is followed by `;`.
 const argEnd = `(?:\s|[;&|)}<>]|$)`
 
-// flagRun matches any run of option words before a command's operand, so a rule
-// that cares about the *operand* does not have to enumerate flag spellings or
-// orderings. Pinning the exact flags is what made the former four `rm` root
-// rules evadable by `rm -r --verbose -f /`: they matched `-r`-then-`-f` and
-// `-f`-then-`-r` and nothing in between. It also does not matter whether the
-// flags are present at all — `rm /` and `rm -rf /` are equally worth confirming.
-const flagRun = `(?:-{1,2}[\w-]*\s+)*`
+// operandRun matches the words a rule skips to reach the operand it cares about:
+// any run of option words, and any run of *other operands*. Both are necessary
+// and for different reasons.
+//
+// Skipping flags means a rule does not have to enumerate flag spellings or
+// orderings. Pinning the exact flags is what made the former four `rm` root rules
+// evadable by `rm -r --verbose -f /`: they matched `-r`-then-`-f` and
+// `-f`-then-`-r` and nothing in between. Whether flags are present at all does
+// not matter either — `rm /` and `rm -rf /` are equally worth confirming.
+//
+// Skipping earlier operands matters because these commands take a *list*, and
+// they act on every element of it. `rm -rf backup /*` deletes the working copy
+// and then everything in the root directory; a rule that only looks at the first
+// operand sees `backup` and allows it. Verified: `rm -rf a b` removes both.
+//
+// A skipped operand may not contain a shell metacharacter, since one of those
+// ends the command rather than continuing the operand list. It *may* be an
+// absolute path (`rm -rf /srv/old /*` must match), which is safe only because
+// `rootTarget` is followed by `argEnd`: the `/` of `/var/log/old` is followed by
+// `v`, not a terminator, so an ordinary absolute path cannot satisfy the target
+// itself. Drop that `argEnd` and this becomes a rule that refuses every absolute
+// path.
+const operandRun = `(?:(?:-{1,2}[\w-]*|[^\s;&|<>()][^\s;&|<>()]*)\s+)*`
 
 // rootTarget matches the ways a shell delivers "the root of the filesystem" as
 // an operand. `/` alone is the least dangerous of them: GNU coreutils refuses
@@ -285,10 +301,11 @@ func dangerousRules() []rule {
 	}
 
 	return []rule{
-		// Destructive filesystem operations. One rule per verb: any flags in any
-		// order, then a target naming the filesystem root. Enumerating flag
-		// orderings instead is what let `rm -r --verbose -f /` through.
-		d("deletion of root filesystem", `\brm\s+`+flagRun+rootTarget+argEnd),
+		// Destructive filesystem operations. One rule per verb: any flags and any
+		// earlier operands in any order, then a target naming the filesystem root.
+		// Enumerating flag orderings is what let `rm -r --verbose -f /` through,
+		// and looking only at the first operand let `rm -rf backup /*` through.
+		d("deletion of root filesystem", `\brm\s+`+operandRun+rootTarget+argEnd),
 		d("recursive deletion of drive root", `del\s+/s\s+/q\s+[A-Za-z]:\\`),
 		d("formatting a drive", `format\s+[A-Za-z]:`),
 		d("creating a filesystem (destructive)", `mkfs\.`),
@@ -301,8 +318,9 @@ func dangerousRules() []rule {
 		// Dangerous permission changes. Unlike rm, chmod has no --preserve-root
 		// failsafe (--no-preserve-root is its documented default), so every form
 		// here proceeds if it is not blocked.
-		d("world-writable permissions on root", `\bchmod\s+`+flagRun+`777\s+`+rootTarget+argEnd),
-		d("ownership change on root", `\bchown\s+`+flagRun+`\S+\s+`+rootTarget+argEnd),
+		d("world-writable permissions on root", `\bchmod\s+`+operandRun+`777\s+`+operandRun+rootTarget+argEnd),
+		d("ownership change on root", `\bchown\s+`+operandRun+rootTarget+argEnd),
+		d("group change on root", `\bchgrp\s+`+operandRun+rootTarget+argEnd),
 		d("granting Everyone full access", `icacls\s+.*\s+/grant\s+Everyone:`),
 
 		// System shutdown/reboot.
