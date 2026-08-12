@@ -155,7 +155,20 @@ const operandRun = `(?:(?:-{1,2}[\w-]*|[^\s;&|<>()][^\s;&|<>()]*)\s+)*`
 // `/.`, and a quoted `/`. Matching only the bare `/` blocked the one variant the
 // OS already blocks and allowed the rest. `chmod` has no failsafe at all: its
 // --no-preserve-root is the documented default.
-const rootTarget = `(?:/(?:\*|\.{1,2})?|"/"?\*?|'/'?\*?)`
+//
+// The trailing class is a *run*, not one optional character, because enumerating
+// the glob and dot spellings one at a time is the same losing game as enumerating
+// flags. `/**` expands to every entry in `/` exactly as `/*` does (verified: with
+// globstar off it is one glob, with it on it also descends), and so do `/***`,
+// `/*/`, `/*/*`, `/.*`, `//*`, and `"/"**`. A rule listing `\*` and `\.{1,2}`
+// matched `/*` and missed all of those.
+//
+// Quote characters appear on both ends and inside the run so that `"/"`, `/"*"`,
+// and `'/'**` are covered; a quote cannot begin a path segment, so admitting them
+// widens nothing real. What keeps this from matching an ordinary absolute path is
+// that the class holds no path-segment characters at all: `/var/log` fails at the
+// `v`. See `operandRun` for why that, plus `argEnd`, is load-bearing.
+const rootTarget = `(?:["']?/["']?[*./"']*)`
 
 // substOpen matches the opening of a `$(…)` command substitution. Also matches
 // `$((` (arithmetic expansion, harmless) — accepted: over-matching arithmetic

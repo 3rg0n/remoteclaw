@@ -63,10 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `rm -r --verbose -f /` and `rm --recursive --force /` — the four flag-ordered
   `rm` rules enumerated `-r`-then-`-f` and `-f`-then-`-r` and nothing in between —
   and `rm -rf backup /*`, where the root target is not the first operand and these
-  commands act on every operand they are given. The four rules collapse into one
-  covering strictly more, verified differentially against both former patterns over
-  29,250 generated invocations (zero inputs lost). `chown` and `chgrp` on root are
-  now covered at all
+  commands act on every operand they are given. The glob spellings are a character
+  run rather than an enumeration, so `rm -rf /**` — which expands to every entry in
+  `/` exactly as `/*` does — is blocked along with `/***`, `/*/`, `/*/*`, `/.*`,
+  `//*`, and the quoted variants; enumerating them one at a time was the original
+  defect a third time, and an independent review caught it after the first two fixes
+  had landed. The four rules collapse into one covering strictly more, verified
+  differentially against both former patterns over 57,024 generated invocations
+  (zero inputs lost). `chown` and `chgrp` on root are now covered at all
   ([ADR 0009](docs/adr/0009-deny-rules-match-the-operand-not-the-flags.md)).
 - **Two more command positions reached the `exec` builtin unblocked**: a leading
   redirection (`>out exec sh`, `2>/dev/null exec sh`) and a backtick substitution

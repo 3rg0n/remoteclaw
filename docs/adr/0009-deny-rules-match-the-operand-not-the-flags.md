@@ -44,6 +44,7 @@ actually destroy a system were allowed:
 | `chmod 777 /*` | **allowed** | proceeds |
 | `rm -rf "/"` | **allowed** | refuses |
 | `rm -r --verbose -f /` | **allowed** | valid, exit 0 |
+| `rm -rf /**` | **allowed** | **proceeds** |
 
 `rm -rf /*` is the canonical spelling of this attack, and it is *not* the same
 argument as `/`: the shell expands the glob into every entry in the root
@@ -82,8 +83,16 @@ enumerating the ways a shell can name the filesystem root is a bounded one.
   and then everything in the root directory, and a rule that inspects only the
   first operand sees `backup` and allows it. Verified with coreutils that
   `rm -rf a b` removes both.
-- `rootTarget` — `(?:/(?:\*|\.{1,2})?|"/"?\*?|'/'?\*?)` — enumerates the operand
-  forms that mean the filesystem root: bare, globbed, dot forms, and quoted.
+- `rootTarget` — `(?:["']?/["']?[*./"']*)` — the operand forms that mean the
+  filesystem root: bare, globbed, dot forms, and quoted. The trailing class is a
+  **run**, not one optional character, for the same reason flags are skipped
+  rather than enumerated. The first version of this constant listed `\*` and
+  `\.{1,2}` as single alternatives and therefore matched `/*` but not `/**`,
+  `/***`, `/*/`, `/*/*`, `/.*`, `//*`, or `"/"**` — all of which expand to the
+  contents of `/`. Quote characters are admitted at both ends and inside the run
+  (`/"*"`, `'/'**`); a quote cannot begin a path segment, so this widens nothing
+  real. The class deliberately contains **no path-segment characters**, which is
+  what keeps `/var/log` from matching — it fails at the `v`.
 - The four `rm` rules collapse into one (`\brm\s+` + `operandRun` + `rootTarget` +
   `argEnd`), and `chmod 777` gains the same shape. `chown` and `chgrp` on root are
   added, which the former rules did not cover in any form.
@@ -118,7 +127,21 @@ load-bearing test: a multi-operand command naming any number of absolute paths
 must stay allowed. That holds only because `rootTarget` is followed by `argEnd` —
 the `/` of `/var/log/old` is followed by `v`, not a terminator, so an ordinary
 absolute path cannot satisfy the target. Removing that `argEnd` turns this into a
-rule that refuses every absolute path.
+rule that refuses every absolute path. That is not merely a comment: reverting it
+turns 18 of the committed allow cases into false positives, so the invariant is
+pinned by tests that fail loudly rather than by a note a refactor can ignore.
+
+**The same mistake recurred a third time, in the same commit that fixed it
+twice.** An independent review of the operand fix found `rm -rf /**` allowed.
+`/**` expands to every entry in `/` exactly as `/*` does, but `rootTarget`
+enumerated its glob and dot forms as single optional characters, so a doubled
+star, a trailing slash after one, or a nested repetition slipped past — `/***`,
+`/*/`, `/*/*`, `/.*`, `//*`, `"/"**` were all allowed. The first fix generalized
+the *flags* to a run and left the *target* an enumeration; the recurrence is
+what makes the point structural rather than anecdotal. The trailing class is now
+a character run, and `TestPolicyBlocksGlobRunsOnRoot` is the enumeration of what
+that run must swallow — kept as a table because the run is the kind of thing a
+later narrowing would quietly undo.
 
 **One position stays knowingly uncovered: a `case` branch.**
 `case x in y) exec sh;; esac` reaches the builtin and is not matched. Covering it
@@ -130,20 +153,24 @@ buys one obscure position at the cost of a common false positive. An operator
 who writes a `case` statement to smuggle `exec` past a deny-list is well past
 what an in-process pattern matcher is claimed to stop (ADR 0004).
 
-**Three new tables, and both directions controlled.**
+**Four new tables, and both directions controlled.**
 `TestPolicyBlocksEveryRootTargetSpelling` carries 19 block and 10 allow cases;
 `TestPolicyBlocksRootTargetAtAnyOperandPosition`, 12 block and 15 allow;
+`TestPolicyBlocksGlobRunsOnRoot`, 21 block and 15 allow;
 `TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick`, 10 block and 6 allow.
 The allow halves matter as much as the block halves, since widening an operand
 pattern is one mistake away from refusing `rm -rf /tmp/build`.
 
 Negative controls were run per-change rather than in aggregate, so each piece is
 pinned by tests that fail without it and only on the intended inputs: reverting
-`rootTarget` fails 12 subtests; the flag-run half of `operandRun`, 6; the
-earlier-operand half, 14; the redirection prefix, 7; the backtick, 1. Two
+the glob run in `rootTarget` fails exactly 21 subtests, all in the new table;
+reverting `rootTarget` wholesale fails 12; the flag-run half of `operandRun`, 6;
+the earlier-operand half, 14; the redirection prefix, 7; the backtick, 1. Two
 over-match probes (39 and 21 commands: absolute paths, multi-operand commands,
 redirection in ordinary position, `coproc`/backticks in argument position,
-routine sysadmin commands) produced no false positives.
+routine sysadmin commands) produced no false positives, and the glob run adds a
+third (35 commands, paths whose first segment is short or dot-like — `/tmp/.`,
+`/var/*/tmp`, `/home/*/.cache`) with none either.
 
 **The lesson ADR 0008 drew, restated with evidence for the operand side.** ADR
 0008 said an anchor fix has two failure directions. This adds: **a rule can be

@@ -624,6 +624,78 @@ func TestPolicyBlocksRootTargetAtAnyOperandPosition(t *testing.T) {
 	}
 }
 
+// TestPolicyBlocksGlobRunsOnRoot pins the *run* in rootTarget's trailing class.
+// An independent review of the operand fix found `rm -rf /**` allowed: `/**`
+// expands to every entry in `/` exactly as `/*` does, but the pattern enumerated
+// `\*` and `\.{1,2}` as single optional characters and matched neither a doubled
+// star nor a trailing slash after one.
+//
+// That is the same mistake as the original defect a third time — enumerating
+// spellings one at a time — so the fix is a character run rather than another
+// alternative, and this table is the enumeration of what the run has to swallow.
+// Each blocked case below reaches the contents of `/`; verified by expanding them
+// against a sandbox tree.
+func TestPolicyBlocksGlobRunsOnRoot(t *testing.T) {
+	p := fullPolicy()
+
+	blocked := []string{
+		"rm -rf /**",
+		"rm -rf /***",
+		"rm -rf /*/",
+		"rm -rf /*/*",
+		"rm -rf /*/*/*",
+		"rm -rf /**/*",
+		"rm -rf /.*",
+		"rm -rf //*",
+		"rm -rf ///",
+		"rm -rf /.//",
+		"rm -rf /*/..",
+		`rm -rf "/"**`,
+		`rm -rf '/'**`,
+		`rm -rf "/*"`,
+		`rm -rf /"*"`,
+		"rm -rf backup /**",
+		"rm -rf a b /**",
+		"chmod 777 /**",
+		"chmod -R 777 /srv /**",
+		"chown -R nobody /**",
+		"chgrp -R staff /**",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			v := p.Check(cmd)
+			require.NotNil(t, v, "expected %q to be blocked", cmd)
+			assert.Equal(t, DispositionChallenge, v.Disposition)
+		})
+	}
+
+	// The run admits `.`, `/`, `*`, and quotes, so the cases that could go wrong
+	// are paths whose *first* segment is short or dot-like. None may be refused:
+	// the class holds no path-segment characters, so `/tmp/.` stops at the `t`.
+	allowed := []string{
+		"rm -rf /tmp/..",
+		"rm -rf /tmp/.",
+		"rm -rf /tmp/*",
+		"rm -rf /var/*/tmp",
+		"rm -rf /home/*/.cache",
+		"rm -rf /usr/share/doc/*",
+		"rm -rf /tmp/*.log",
+		"rm -rf /etc/./nginx",
+		"rm -rf /srv//cache",
+		"rm -rf ./.git",
+		"rm -rf ./",
+		"rm -rf ../",
+		`rm -rf "/tmp/."`,
+		`rm -rf "/tmp/a" "/tmp/b"`,
+		"chmod 777 ./x",
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed/"+cmd, func(t *testing.T) {
+			assert.Nil(t, p.Check(cmd), "expected %q to be allowed", cmd)
+		})
+	}
+}
+
 // TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick covers two more command
 // positions found after ADR 0008: a redirection may precede the command word, and
 // a backtick opens a substitution whose contents execute. Both were allowed.
