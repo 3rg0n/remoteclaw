@@ -73,9 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   (zero inputs lost). `chown` and `chgrp` on root are now covered at all
   ([ADR 0009](docs/adr/0009-deny-rules-match-the-operand-not-the-flags.md)).
 - **Two more command positions reached the `exec` builtin unblocked**: a leading
-  redirection (`>out exec sh`, `2>/dev/null exec sh`) and a backtick substitution
-  (`` echo `exec sh` ``). Redirections and `coproc` join the skipped-prefix set and
-  the backtick joins the separator set. A `case` branch
+  redirection (`>out exec sh`, `2>/dev/null exec sh`, and the space-separated
+  `> out exec sh` — verified to reach the builtin and replace the shell) and a
+  backtick substitution (`` echo `exec sh` ``). Redirections and `coproc` join the
+  skipped-prefix set and the backtick joins the separator set. The redirection
+  form consumes its *target*, not just the operator, which matters in both
+  directions: a version stopping at the operator missed the space-separated
+  spelling and left the target in command position, refusing `ls; > exec.log` — a
+  truncate idiom that executes nothing. A `case` branch
   (`case x in y) exec sh;; esac`) remains knowingly uncovered: matching it requires
   treating `)` as a separator, which matches the end of every `$(…)` and would
   refuse `docker $(flags) exec web sh` — the trade

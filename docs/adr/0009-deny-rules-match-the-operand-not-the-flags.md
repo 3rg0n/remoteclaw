@@ -96,8 +96,17 @@ enumerating the ways a shell can name the filesystem root is a bounded one.
 - The four `rm` rules collapse into one (`\brm\s+` + `operandRun` + `rootTarget` +
   `argEnd`), and `chmod 777` gains the same shape. `chown` and `chgrp` on root are
   added, which the former rules did not cover in any form.
-- `cmdPrefix` gains leading redirections (`\d*[<>]{1,2}\S*`) and `coproc`;
-  `cmdPos` gains the backtick as a separator.
+- `cmdPrefix` gains leading redirections (`\d*[<>]{1,2}\s*[^\s<>]\S*`) and
+  `coproc`; `cmdPos` gains the backtick as a separator. The redirection
+  alternative consumes its **target**, not just the operator: a target may be
+  separated from the operator by whitespace, so `> out exec sh` is the same
+  command as `>out exec sh`. A version stopping at the operator got this wrong in
+  both directions at once — it left the target in command position, refusing
+  `ls; > exec.log` (a truncate idiom that executes nothing) *and* missing
+  `> out exec sh` (which reaches the builtin: verified, `exec` ran and replaced
+  the shell). Excluding `<`/`>` from the target's first character keeps `{1,2}`
+  from reading `>>` as one operator plus a target of `>`, which reintroduced the
+  false positive for `ls; >> exec.log`.
 
 Dispositions are unchanged: all of this stays `DispositionChallenge`. The
 operator who owns the machine may wipe it — the control is proof of intent.
@@ -153,11 +162,22 @@ buys one obscure position at the cost of a common false positive. An operator
 who writes a `case` statement to smuggle `exec` past a deny-list is well past
 what an in-process pattern matcher is claimed to stop (ADR 0004).
 
+**Reviewing the *shared* constants is what found the last defect, and it was
+not in the changed rules.** Two independent review passes examined `operandRun`
+and `rootTarget` — both confined to the four destructive rules — and neither
+looked at `cmdPrefix`, which this ADR also widened and which feeds the `exec`
+and `$(` rules instead. That is where the remaining bug was: the redirection
+alternative consumed the operator but not its target. Checking every rule that
+references a constant a change touches, rather than only the rules the change
+was *about*, is the check that would have caught it first. It is now the
+question this ADR asks of any future edit to `cmdPos`, `cmdPrefix`, `argEnd`,
+`operandRun`, or `rootTarget`.
+
 **Four new tables, and both directions controlled.**
 `TestPolicyBlocksEveryRootTargetSpelling` carries 19 block and 10 allow cases;
 `TestPolicyBlocksRootTargetAtAnyOperandPosition`, 12 block and 15 allow;
 `TestPolicyBlocksGlobRunsOnRoot`, 21 block and 15 allow;
-`TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick`, 10 block and 6 allow.
+`TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick`, 19 block and 19 allow.
 The allow halves matter as much as the block halves, since widening an operand
 pattern is one mistake away from refusing `rm -rf /tmp/build`.
 
@@ -165,7 +185,10 @@ Negative controls were run per-change rather than in aggregate, so each piece is
 pinned by tests that fail without it and only on the intended inputs: reverting
 the glob run in `rootTarget` fails exactly 21 subtests, all in the new table;
 reverting `rootTarget` wholesale fails 12; the flag-run half of `operandRun`, 6;
-the earlier-operand half, 14; the redirection prefix, 7; the backtick, 1. Two
+the earlier-operand half, 14; the redirection prefix, 7; the redirection
+*target*, 17 — 6 block cases and 11 allow, the split that showed the same
+mistake was costing coverage and false positives simultaneously; the backtick,
+1. Two
 over-match probes (39 and 21 commands: absolute paths, multi-operand commands,
 redirection in ordinary position, `coproc`/backticks in argument position,
 routine sysadmin commands) produced no false positives, and the glob run adds a

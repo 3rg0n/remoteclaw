@@ -112,9 +112,18 @@ const cmdPos = `(?:^|[;&|\n(\x60]\s*|\{\s+)` + cmdPrefix
 // follows (`if`, `elif`, `then`, `else`, `while`, `until`, `do`), and leading
 // redirections. A redirection may precede the command word (`>out exec sh`,
 // `2>/dev/null exec sh`) without changing which word it is.
-const cmdPrefix = `(?:(?:[A-Za-z_]\w*=\S*|\d*[<>]{1,2}\S*|env|nohup|nice|ionice|` +
-	`time|stdbuf|setsid|command|builtin|coproc|xargs|if|elif|then|else|while|` +
-	`until|do|!)\s+)*`
+//
+// The redirection alternative must consume its *target*, which is why it ends in
+// `\s*[^\s<>]\S*` rather than `\S*`. A redirect target may be separated from the
+// operator by whitespace (`> out exec sh` is the same command as `>out exec sh`),
+// so a form that stops at the operator leaves the target sitting in command
+// position: `ls; > exec.log` — a valid truncate idiom that executes nothing —
+// was refused as a shell-exec bypass. Excluding `<`/`>` from the target's first
+// character is what keeps `>>` from being read as one operator plus a target of
+// `>`, which reintroduced the same false positive for `ls; >> exec.log`.
+const cmdPrefix = `(?:(?:[A-Za-z_]\w*=\S*|\d*[<>]{1,2}\s*[^\s<>]\S*|env|nohup|` +
+	`nice|ionice|time|stdbuf|setsid|command|builtin|coproc|xargs|if|elif|then|` +
+	`else|while|until|do|!)\s+)*`
 
 // argEnd matches the end of a command argument: whitespace, end of string, or a
 // shell metacharacter that terminates the word. Rules that pin an exact argument
