@@ -60,11 +60,11 @@ func pattern(expr string) matcher {
 
 // cmdPos matches the position where a shell starts reading a command: the
 // beginning of the line, or immediately after a separator (`;`, `&&`, `||`, `|`,
-// newline), an opening subshell paren, or an opening brace group — skipping any
-// leading environment assignments, command wrappers, pipeline negation, and
-// compound-statement keywords, which the shell allows before the command word
-// without changing which word that is. `FOO=1 exec sh` and `nohup exec sh` are
-// the same builtin as `exec sh`.
+// newline), an opening subshell paren, a backtick, or an opening brace group —
+// skipping any leading environment assignments, redirections, command wrappers,
+// pipeline negation, and compound-statement keywords, which the shell allows
+// before the command word without changing which word that is. `FOO=1 exec sh`,
+// `nohup exec sh`, and `2>/dev/null exec sh` are the same builtin as `exec sh`.
 //
 // It exists because several signals are only meaningful in command position.
 // `exec` is a shell builtin there and a subcommand name anywhere else, so
@@ -91,16 +91,39 @@ func pattern(expr string) matcher {
 //     `cp file{a,b}` never have it. This is a shell rule, not a heuristic —
 //     `{echo a;}` is not a valid group.
 //
+// A backtick is spelled `\x60` because it cannot appear literally inside a Go
+// raw string. It belongs in the separator set: a backtick opens a command
+// substitution whose contents are executed, so an `exec` inside backticks
+// reaches the builtin just as one inside `$(…)` does.
+//
+// One position is knowingly uncovered: a `case` branch, as in
+// `case x in y) exec sh;; esac`. Covering it means treating a closing `)` as a
+// separator, which matches the end of every `$(…)` substitution and refuses
+// `docker $(flags) exec web sh` — the same trade ADR 0007 rejected. It stays
+// uncovered on purpose; see ADR 0009.
+//
 // Removing the anchor to "harden" these rules is the wrong call, and ADR 0007
 // records why — make TestPolicyAllowsNarrowedExecAndSubstitution fail first.
-const cmdPos = `(?:^|[;&|\n(]\s*|\{\s+)` + cmdPrefix
+const cmdPos = `(?:^|[;&|\n(\x60]\s*|\{\s+)` + cmdPrefix
 
 // cmdPrefix is the run of tokens a shell skips before the command word: any
 // number of VAR=value assignments, wrappers that exec another command, the `!`
-// pipeline negation, and the compound-statement keywords after which a command
-// word follows (`if`, `elif`, `then`, `else`, `while`, `until`, `do`).
-const cmdPrefix = `(?:(?:[A-Za-z_]\w*=\S*|env|nohup|nice|ionice|time|stdbuf|` +
-	`setsid|command|builtin|xargs|if|elif|then|else|while|until|do|!)\s+)*`
+// pipeline negation, the compound-statement keywords after which a command word
+// follows (`if`, `elif`, `then`, `else`, `while`, `until`, `do`), and leading
+// redirections. A redirection may precede the command word (`>out exec sh`,
+// `2>/dev/null exec sh`) without changing which word it is.
+//
+// The redirection alternative must consume its *target*, which is why it ends in
+// `\s*[^\s<>]\S*` rather than `\S*`. A redirect target may be separated from the
+// operator by whitespace (`> out exec sh` is the same command as `>out exec sh`),
+// so a form that stops at the operator leaves the target sitting in command
+// position: `ls; > exec.log` — a valid truncate idiom that executes nothing —
+// was refused as a shell-exec bypass. Excluding `<`/`>` from the target's first
+// character is what keeps `>>` from being read as one operator plus a target of
+// `>`, which reintroduced the same false positive for `ls; >> exec.log`.
+const cmdPrefix = `(?:(?:[A-Za-z_]\w*=\S*|\d*[<>]{1,2}\s*[^\s<>]\S*|env|nohup|` +
+	`nice|ionice|time|stdbuf|setsid|command|builtin|coproc|xargs|if|elif|then|` +
+	`else|while|until|do|!)\s+)*`
 
 // argEnd matches the end of a command argument: whitespace, end of string, or a
 // shell metacharacter that terminates the word. Rules that pin an exact argument
@@ -108,6 +131,53 @@ const cmdPrefix = `(?:(?:[A-Za-z_]\w*=\S*|env|nohup|nice|ionice|time|stdbuf|` +
 // something else — a bare `(\s|$)` misses the terminator forms, and
 // `rm -rf /; echo done` then goes unmatched because the `/` is followed by `;`.
 const argEnd = `(?:\s|[;&|)}<>]|$)`
+
+// operandRun matches the words a rule skips to reach the operand it cares about:
+// any run of option words, and any run of *other operands*. Both are necessary
+// and for different reasons.
+//
+// Skipping flags means a rule does not have to enumerate flag spellings or
+// orderings. Pinning the exact flags is what made the former four `rm` root rules
+// evadable by `rm -r --verbose -f /`: they matched `-r`-then-`-f` and
+// `-f`-then-`-r` and nothing in between. Whether flags are present at all does
+// not matter either — `rm /` and `rm -rf /` are equally worth confirming.
+//
+// Skipping earlier operands matters because these commands take a *list*, and
+// they act on every element of it. `rm -rf backup /*` deletes the working copy
+// and then everything in the root directory; a rule that only looks at the first
+// operand sees `backup` and allows it. Verified: `rm -rf a b` removes both.
+//
+// A skipped operand may not contain a shell metacharacter, since one of those
+// ends the command rather than continuing the operand list. It *may* be an
+// absolute path (`rm -rf /srv/old /*` must match), which is safe only because
+// `rootTarget` is followed by `argEnd`: the `/` of `/var/log/old` is followed by
+// `v`, not a terminator, so an ordinary absolute path cannot satisfy the target
+// itself. Drop that `argEnd` and this becomes a rule that refuses every absolute
+// path.
+const operandRun = `(?:(?:-{1,2}[\w-]*|[^\s;&|<>()][^\s;&|<>()]*)\s+)*`
+
+// rootTarget matches the ways a shell delivers "the root of the filesystem" as
+// an operand. `/` alone is the least dangerous of them: GNU coreutils refuses
+// `rm -rf /` outright via --preserve-root, so the forms that actually destroy a
+// system are the ones that name root's *contents* or defeat the failsafe —
+// `/*` (the canonical spelling, expanded by the shell into every entry in `/`),
+// `/.`, and a quoted `/`. Matching only the bare `/` blocked the one variant the
+// OS already blocks and allowed the rest. `chmod` has no failsafe at all: its
+// --no-preserve-root is the documented default.
+//
+// The trailing class is a *run*, not one optional character, because enumerating
+// the glob and dot spellings one at a time is the same losing game as enumerating
+// flags. `/**` expands to every entry in `/` exactly as `/*` does (verified: with
+// globstar off it is one glob, with it on it also descends), and so do `/***`,
+// `/*/`, `/*/*`, `/.*`, `//*`, and `"/"**`. A rule listing `\*` and `\.{1,2}`
+// matched `/*` and missed all of those.
+//
+// Quote characters appear on both ends and inside the run so that `"/"`, `/"*"`,
+// and `'/'**` are covered; a quote cannot begin a path segment, so admitting them
+// widens nothing real. What keeps this from matching an ordinary absolute path is
+// that the class holds no path-segment characters at all: `/var/log` fails at the
+// `v`. See `operandRun` for why that, plus `argEnd`, is load-bearing.
+const rootTarget = `(?:["']?/["']?[*./"']*)`
 
 // substOpen matches the opening of a `$(…)` command substitution. Also matches
 // `$((` (arithmetic expansion, harmless) — accepted: over-matching arithmetic
@@ -253,11 +323,11 @@ func dangerousRules() []rule {
 	}
 
 	return []rule{
-		// Destructive filesystem operations — match flags in any order/combination.
-		d("recursive deletion of root filesystem", `rm\s+(-\w*r\w*\s+)*(-\w*f\w*\s+)*/`+argEnd),
-		d("recursive deletion of root filesystem", `rm\s+(-\w*f\w*\s+)*(-\w*r\w*\s+)*/`+argEnd),
-		d("recursive deletion of root filesystem", `rm\s+-r\s+-f\s+/`+argEnd),
-		d("recursive deletion of root filesystem", `rm\s+-f\s+-r\s+/`+argEnd),
+		// Destructive filesystem operations. One rule per verb: any flags and any
+		// earlier operands in any order, then a target naming the filesystem root.
+		// Enumerating flag orderings is what let `rm -r --verbose -f /` through,
+		// and looking only at the first operand let `rm -rf backup /*` through.
+		d("deletion of root filesystem", `\brm\s+`+operandRun+rootTarget+argEnd),
 		d("recursive deletion of drive root", `del\s+/s\s+/q\s+[A-Za-z]:\\`),
 		d("formatting a drive", `format\s+[A-Za-z]:`),
 		d("creating a filesystem (destructive)", `mkfs\.`),
@@ -267,8 +337,12 @@ func dangerousRules() []rule {
 		d("truncating file to zero bytes", `\btruncate\b.*--size\s+0`),
 		d("fork bomb", `:\(\)\s*\{\s*:\|:\s*&\s*\}\s*;?\s*:`),
 
-		// Dangerous permission changes.
-		d("recursive world-writable permissions on root", `chmod\s+(-[a-zA-Z]*R[a-zA-Z]*\s+)?777\s+/`+argEnd),
+		// Dangerous permission changes. Unlike rm, chmod has no --preserve-root
+		// failsafe (--no-preserve-root is its documented default), so every form
+		// here proceeds if it is not blocked.
+		d("world-writable permissions on root", `\bchmod\s+`+operandRun+`777\s+`+operandRun+rootTarget+argEnd),
+		d("ownership change on root", `\bchown\s+`+operandRun+rootTarget+argEnd),
+		d("group change on root", `\bchgrp\s+`+operandRun+rootTarget+argEnd),
 		d("granting Everyone full access", `icacls\s+.*\s+/grant\s+Everyone:`),
 
 		// System shutdown/reboot.

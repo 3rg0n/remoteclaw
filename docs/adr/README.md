@@ -18,3 +18,4 @@ Format: [Nygard short form](https://github.blog/engineering/architecture-optimiz
 | [0006](0006-one-command-policy-with-tagged-rules.md) | One command deny-list engine, with tagged rules (category + disposition) | accepted |
 | [0007](0007-deny-rules-anchored-to-command-position.md) | Deny rules that mean something only in command position are anchored there | accepted |
 | [0008](0008-command-position-covers-every-shell-entry-point.md) | The command-position anchor must enumerate every shell entry point (amends 0007) | accepted |
+| [0009](0009-deny-rules-match-the-operand-not-the-flags.md) | Deny rules match the operand, not the flags (amends 0008) | accepted |

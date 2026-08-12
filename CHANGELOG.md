@@ -47,6 +47,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   unrecognized value, or an empty one — requires an explicit allowlist entry. This
   predates the authorization rework, but that rework made this function the single
   gate for every connection mode, so its edge cases now matter everywhere.
+- **`rm -rf /*` was not blocked, and it is the form that actually works.** The
+  root-deletion and `chmod 777` rules matched a bare `/` — which is the one
+  spelling GNU coreutils refuses on its own, via the `--preserve-root` default
+  (`rm -rf /` exits 1 without touching anything). The spellings that do destroy a
+  system were allowed: `rm -rf /*` (the canonical one — the shell expands the glob
+  into every entry in `/`, so `rm` never sees a `/` operand and no failsafe
+  applies), `rm -rf --no-preserve-root /`, `chmod 777 /*`, and the quoted forms.
+  `chmod` has no failsafe at all; `--no-preserve-root` is its documented default.
+  Verified on coreutils 8.32. So the rule fired on the harmless variant and missed
+  the dangerous ones. **This was live in every released version** — `git log -S`
+  finds no glob form anywhere in the history of `internal/security/`. Rules now
+  match the *operand* (`rootTarget`: bare, globbed, dot, and quoted forms) and
+  skip over flags and earlier operands to find it (`operandRun`), which also closes
+  `rm -r --verbose -f /` and `rm --recursive --force /` — the four flag-ordered
+  `rm` rules enumerated `-r`-then-`-f` and `-f`-then-`-r` and nothing in between —
+  and `rm -rf backup /*`, where the root target is not the first operand and these
+  commands act on every operand they are given. The glob spellings are a character
+  run rather than an enumeration, so `rm -rf /**` — which expands to every entry in
+  `/` exactly as `/*` does — is blocked along with `/***`, `/*/`, `/*/*`, `/.*`,
+  `//*`, and the quoted variants; enumerating them one at a time was the original
+  defect a third time, and an independent review caught it after the first two fixes
+  had landed. The four rules collapse into one covering strictly more, verified
+  differentially against both former patterns over 57,024 generated invocations
+  (zero inputs lost). `chown` and `chgrp` on root are now covered at all
+  ([ADR 0009](docs/adr/0009-deny-rules-match-the-operand-not-the-flags.md)).
+- **Two more command positions reached the `exec` builtin unblocked**: a leading
+  redirection (`>out exec sh`, `2>/dev/null exec sh`, and the space-separated
+  `> out exec sh` — verified to reach the builtin and replace the shell) and a
+  backtick substitution (`` echo `exec sh` ``). Redirections and `coproc` join the
+  skipped-prefix set and the backtick joins the separator set. The redirection
+  form consumes its *target*, not just the operator, which matters in both
+  directions: a version stopping at the operator missed the space-separated
+  spelling and left the target in command position, refusing `ls; > exec.log` — a
+  truncate idiom that executes nothing. A `case` branch
+  (`case x in y) exec sh;; esac`) remains knowingly uncovered: matching it requires
+  treating `)` as a separator, which matches the end of every `$(…)` and would
+  refuse `docker $(flags) exec web sh` — the trade
+  [ADR 0007](docs/adr/0007-deny-rules-anchored-to-command-position.md) rejected
+  ([ADR 0009](docs/adr/0009-deny-rules-match-the-operand-not-the-flags.md)).
 - **`rm -rf /;` was not blocked.** The four `rm` root-deletion rules and the
   `chmod 777 /` rule required whitespace or end-of-string after the `/`, so any
   shell metacharacter terminating the argument evaded them: `rm -rf /;` and
