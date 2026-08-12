@@ -177,6 +177,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   working tree and never in storage.
 
 ### Fixed
+- **The `openai-compat` live integration tests no longer fail when an unrelated
+  server holds port 8080.** Their skip guard did a bare TCP dial to
+  `localhost:8080`, which only proves *something* is listening — and 8080 is a
+  popular port. Any other local server (in the case that surfaced this, a wasm
+  runtime) made the guard pass, and the tests then ran against the wrong server
+  and failed with a confusing `405 Method Not Allowed`. That is a false failure
+  reporting a broken client when the real condition is "the mock is not running",
+  and it is the failure mode a skip guard exists to prevent. The guard now POSTs
+  to the real `/chat/completions` path and treats only 404/405 as "not an
+  OpenAI-dialect endpoint", so a foreign listener skips with a message naming the
+  cause. Verified in all four directions: skips when nothing listens, skips on a
+  foreign listener, runs and passes against a real endpoint, and **still fails
+  when the client is broken** — the last one matters, since a guard that
+  over-skips would silently stop testing anything.
 - **Tool calls now honor context cancellation.** Every executor handler took a
   `context.Context` and none of them read it, so the signature promised
   cancellability the bodies did not deliver: neither the processor's 5-minute hard
