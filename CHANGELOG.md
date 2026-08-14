@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-14
+
 ### Added
 - **CI enforces the full quality gate: `gofmt`, `go vet`, `golangci-lint`, and
   the race test.** Only the race test ran before, and only on a `v*` tag push —
