@@ -135,6 +135,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   fix. Override with `health.allow_non_loopback: true`, which logs a warning.
 
 ### Changed
+- **Bumped every stale GitHub Actions pin to its current release, still pinned by
+  commit SHA.** `actions/checkout` v4.2.2→v7.0.1, `actions/setup-go` v5.5.0→v7.0.0,
+  `actions/upload-artifact` v4.6.2→v7.0.1, `actions/download-artifact` v4.3.0→v8.0.1,
+  `softprops/action-gh-release` v2.2.2→v3.0.2. The v4/v5 lines run on the Node 20
+  Actions runtime, which is deprecated; every new pin declares `node24`. Each SHA
+  was resolved from the release tag through the GitHub API and verified to be a
+  commit object — two of the tags (`action-gh-release`, `golangci-lint-action`) are
+  *annotated tags*, whose ref SHA is the tag object rather than the commit, so
+  pinning the ref SHA directly would have pinned something a `git checkout` cannot
+  reach. `golangci/golangci-lint-action` was already current at v9.3.0.
+  Breaking changes in the majors were checked against what this repo actually
+  uses: `setup-go` v6 forces `GOTOOLCHAIN=local` (no effect — `go.mod` declares
+  `go 1.26.0` and no `toolchain` directive), `download-artifact` v8 promotes a
+  digest mismatch from a warning to a job failure (kept — these are the release
+  binaries the checksums are computed over), `upload-artifact` v7 adds an `archive`
+  input left at its `true` default, and `checkout` v7 blocks fork-PR checkout on
+  `pull_request_target`/`workflow_run`, neither of which this repo triggers on.
 - **One command deny-list engine.** `security.DangerousChecker` and
   `executor.Guard.IsSecretReadCommand` are replaced by `security.CommandPolicy`:
   a single rule table where each rule carries a **category** (`destructive`,
